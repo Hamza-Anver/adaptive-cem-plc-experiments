@@ -37,6 +37,8 @@ static const PlcVarMeta METADATA_DICT[] = {
     {"prime_score",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, prime_score),   true},
     {"flux_score",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flux_score),    true},
     {"flow_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flow_accum),    false},
+    {"press_accum",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, press_accum),   false},
+    {"temp_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, temp_accum),    false},
     {"status",        PLC_TYPE_UINT8,  sizeof(int8_t),  offsetof(PipelineState, status),        false}
 };
 

@@ -15,7 +15,7 @@ typedef struct {
     bool is_key;        // Flag to tell the fuzzer if this is a priority variable for ML
 } PlcVarMeta;
 */
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub enum PlcVarType {
     UINT8  = 0,
@@ -25,6 +25,7 @@ pub enum PlcVarType {
     FLOAT  = 4
 }
 
+#[derive(Clone)]
 #[repr(C)]
 pub struct PLCVarMetaData {
     pub name: [u8; 32], // Human-readable variable name (e.g., "temperature")
