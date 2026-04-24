@@ -78,9 +78,6 @@ void plc_step(const uint8_t* inputs, size_t size) {
     uint8_t coolant_rate  = inputs[5];
     uint8_t cmd           = inputs[6] & 1;
 
-    printf("Cycle: %d, Phase: %d, Pump: %d, Valve: %d, Temp: %d, Pressure: %d, Conc: %d, Coolant: %d, Cmd: %d\n",
-        state.cycle_count, state.phase, pump_rate, valve_pos, pipe_temp, back_pressure, feed_conc, coolant_rate, cmd);
-
     switch (state.phase) {
         case PHASE_IDLE:
             if (cmd == 1) {
@@ -116,7 +113,6 @@ void plc_step(const uint8_t* inputs, size_t size) {
         case PHASE_FILL:
             state.phase_counter++;
             
-            // Accumulators
             if (pump_rate >= 40 && pump_rate <= 90) state.flow_accum++;
             else state.flow_accum = (state.flow_accum > 1) ? state.flow_accum - 2 : 0;
 
@@ -130,7 +126,6 @@ void plc_step(const uint8_t* inputs, size_t size) {
                 state.fill_head++;
             }
 
-            // Zone-based State Barrier
             int32_t current_pv = (int32_t)pump_rate + (int32_t)valve_pos;
             bool fail = false;
 
@@ -156,19 +151,34 @@ void plc_step(const uint8_t* inputs, size_t size) {
                 state.fill_head = (state.fill_head > 5) ? state.fill_head - 6 : 0;
             }
 
-            // The OOB Bug: Index is never checked against 64.
             if (state.fill_head >= 64) {
                 printf("Pipeline Deep OOB triggered at index: %d\n", state.fill_head);
                 abort();
             }
-            printf("Cycle: %d, Phase: %d, Fill Head: %d\n", state.cycle_count, state.phase, state.fill_head);
             state.buffer[state.fill_head] = state.cycle_count;
             break;
     }
     state.status = (int8_t)state.phase;
 }
 
-size_t plc_get_var_count(void) { return sizeof(METADATA_DICT) / sizeof(PlcVarMeta); }
+// --- Memory Map Introspection ---
+
+size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
+    if (max_size < sizeof(PipelineState)) return 0;
+    memcpy(out_buffer, &state, sizeof(PipelineState));
+    return sizeof(PipelineState);
+}
+
+bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {
+    if (size != sizeof(PipelineState)) return false;
+    memcpy(&state, in_buffer, sizeof(PipelineState));
+    return true;
+}
+
+size_t plc_get_var_count(void) { 
+    return sizeof(METADATA_DICT) / sizeof(PlcVarMeta); 
+}
+
 bool plc_get_var_meta(size_t index, PlcVarMeta* out) {
     if (index >= plc_get_var_count()) return false;
     memcpy(out, &METADATA_DICT[index], sizeof(PlcVarMeta));

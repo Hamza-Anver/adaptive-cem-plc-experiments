@@ -31,7 +31,8 @@ macro_rules! fuzzer_registry {
 fuzzer_registry!(
     simple_stateless, 
     simple_stateful,
-    pipeline_smoke
+    pipeline_smoke,
+    pipeline_greybox
 );
 
 fn main() {
