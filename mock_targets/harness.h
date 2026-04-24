@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// 1. The Data Types your fuzzer understands
+// The Data Types your fuzzer understands
 typedef enum {
     PLC_TYPE_UINT8  = 0,
     PLC_TYPE_UINT16 = 1,
@@ -14,7 +14,7 @@ typedef enum {
     PLC_TYPE_FLOAT  = 4
 } PlcVarType;
 
-// 2. The Metadata Dictionary Entry
+// The Metadata Dictionary Entry
 typedef struct {
     char name[32];      // Human-readable variable name (e.g., "temperature")
     PlcVarType type;    // How the fuzzer should interpret the bytes
@@ -23,9 +23,6 @@ typedef struct {
     bool is_key;        // Flag to tell the fuzzer if this is a priority variable for ML
 } PlcVarMeta;
 
-// =========================================================================
-// THE TARGET API (To be implemented by boiler_plc.c, conveyor_plc.c, etc.)
-// =========================================================================
 
 // Memory Map Introspection
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size);
@@ -36,11 +33,6 @@ void plc_init(void);
 void plc_reset(void);
 size_t plc_get_input_size(void);
 void plc_step(const uint8_t* inputs, size_t size);
-
-
-// =========================================================================
-// THE FUZZER HARNESS API (Exported to Rust)
-// =========================================================================
 
 // Cold boot the PLC hardware (Run once at startup)
 void harness_boot_plc(void);
