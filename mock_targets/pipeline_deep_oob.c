@@ -68,6 +68,7 @@ static void reset_to_prime(void) {
 
 void plc_step(const uint8_t* inputs, size_t size) {
     if (size < INPUT_SIZE) return;
+    static uint8_t max_fill_head = 0;
 
     state.cycle_count++;
     uint8_t pump_rate     = inputs[0];
@@ -149,6 +150,11 @@ void plc_step(const uint8_t* inputs, size_t size) {
 
             if (fail) {
                 state.fill_head = (state.fill_head > 5) ? state.fill_head - 6 : 0;
+            }
+
+            if (state.fill_head > max_fill_head) {
+                max_fill_head = state.fill_head;
+                printf("New max fill head: %d at cycle %d\n", max_fill_head, state.cycle_count);
             }
 
             if (state.fill_head >= 64) {
