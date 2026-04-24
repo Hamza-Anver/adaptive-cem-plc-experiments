@@ -57,7 +57,7 @@ fn main() {
 
 
 use crate::common::{
-    get_all_var_metadata, get_key_var_metadata, get_var_vec_to_hashmap
+    get_all_var_metadata, get_key_var_metadata, get_var_vec_to_hashmap, get_var_vec_to_flat_var_vec
 };
 // Check that the common rs functions are valid
 #[cfg(test)]
@@ -98,5 +98,15 @@ mod tests {
             // FIX: is this printing the right thing
             println!("Variable: {}, Value: {:#?}", name, value.to_ascii_lowercase());
         }
+    }
+
+    #[test]
+    fn test_get_var_vec_to_flat_var_vec() {
+        println!("Testing get_var_vec_to_flat_var_vec...");
+        let metadata = get_all_var_metadata();
+        let state_vec = get_var_vec_to_flat_var_vec(metadata);
+        assert!(!state_vec.is_empty(), "Expected to retrieve some variable states");
+        println!("Retrieved state vector with length {}", state_vec.len());
+        println!("State Vector: {:#?}", state_vec);
     }
 }

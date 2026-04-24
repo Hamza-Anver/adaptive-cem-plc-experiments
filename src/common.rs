@@ -93,5 +93,19 @@ pub fn get_var_vec_to_hashmap(metadata_list: Vec<PLCVarMetaData>) -> HashMap<Str
     state_map
 }
 
+pub fn get_var_vec_to_flat_var_vec(metadata_list: Vec<PLCVarMetaData>) ->Vec<u8> {
+    let mut state_vec = Vec::new();
+    let mut full_state_buffer = vec![0u8; 1024]; // Assuming the full state won't exceed 1024 bytes
+    unsafe {
+        let full_state_size = plc_get_full_state(full_state_buffer.as_mut_ptr(), full_state_buffer.len());
+        full_state_buffer.truncate(full_state_size);
+    }
+    for meta in metadata_list {
+        let var_state = full_state_buffer[meta.offset..meta.offset + meta.size].to_vec();
+        state_vec.extend(var_state);
+    }
+    state_vec
+}
+
 
 
