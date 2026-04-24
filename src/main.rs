@@ -53,3 +53,50 @@ fn main() {
     
     route_fuzzer(strategy);
 }
+
+
+
+use crate::common::{
+    get_all_var_metadata, get_key_var_metadata, get_var_vec_to_hashmap
+};
+// Check that the common rs functions are valid
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_all_var_metadata() {
+        let metadata = get_all_var_metadata();
+        assert!(!metadata.is_empty(), "Expected to retrieve some variable metadata");
+        println!("Retrieved {} variables from metadata", metadata.len());   
+        for var in metadata.iter() {
+            let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
+            println!("Variable: {}, Type: {:#?}, Size: {}, Offset: {}, Is Key: {}", 
+                name, var.var_type, var.size, var.offset, var.is_key);
+        }
+    }
+
+    #[test]
+    fn test_get_key_var_metadata() {
+        let key_metadata = get_key_var_metadata();
+        assert!(!key_metadata.is_empty(), "Expected to retrieve some key variable metadata");
+        println!("Retrieved {} key variables from metadata", key_metadata.len());   
+        for var in key_metadata.iter() {
+            let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
+            println!("Key Variable: {}, Type: {:#?}, Size: {}, Offset: {}", 
+                name, var.var_type, var.size, var.offset);
+        }
+    }
+
+    #[test]
+    fn test_get_var_vec_to_hashmap() {
+        let metadata = get_all_var_metadata();
+        let state_map = get_var_vec_to_hashmap(metadata);
+        assert!(!state_map.is_empty(), "Expected to retrieve some variable states");
+        println!("Retrieved state for {} variables", state_map.len());
+        for (name, value) in state_map.iter() {
+            // FIX: is this printing the right thing
+            println!("Variable: {}, Value: {:#?}", name, value.to_ascii_lowercase());
+        }
+    }
+}
