@@ -19,7 +19,7 @@ use libafl_targets::std_edges_map_observer;
 
 use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_time_series, plc_get_input_size};
 
-const SEQUENCE_LENGTH: usize = 16;
+const SEQUENCE_LENGTH: usize = 1024;
 
 pub fn run() {
     println!("Starting Stateful Sequence Fuzzer...");
@@ -52,6 +52,8 @@ pub fn run() {
     }
 
     let input_size = unsafe { plc_get_input_size() };
+
+    println!("Input size per tick: {} bytes", input_size);
 
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
