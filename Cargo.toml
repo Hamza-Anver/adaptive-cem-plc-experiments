@@ -1,0 +1,12 @@
+[package]
+name = "libafl_sandbox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libafl = "0.15.4"
+libafl_bolts = "0.15.4"
+libafl_targets = { version = "0.15.4", features = ["sancov_pcguard_edges"] }
+
+[build-dependencies]
+cc = "1.2.60"
