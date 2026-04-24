@@ -24,8 +24,8 @@ use libafl_targets::std_edges_map_observer;
 use libafl::observers::{CanTrack, StdMapObserver};
 
 use crate::common::{
-    harness_boot_plc, harness_reset_plc, harness_fuzz_time_series, 
-    plc_get_input_size, plc_get_full_state
+    harness_boot_plc, harness_reset_plc,
+    plc_get_full_state, plc_get_input_size, plc_step,
 };
 
 #[repr(C)]
@@ -67,7 +67,7 @@ impl Default for PipelineState {
 }
 
 const TICK_SIZE: usize = 7;
-const METRICS_SIZE: usize = 13;
+const METRICS_SIZE: usize = 21;
 
 static mut PLC_METRICS: [u8; METRICS_SIZE] = [0; METRICS_SIZE];
 
@@ -154,6 +154,79 @@ where
         }
 
         Self::clamp_cmd_bit(bytes);
+        Ok(MutationResult::Mutated)
+    }
+
+    fn post_exec(&mut self, _state: &mut S, _new_corpus_id: Option<libafl::corpus::CorpusId>) -> Result<(), libafl::Error> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SuffixMutator;
+
+impl SuffixMutator {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Named for SuffixMutator {
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("SuffixMutator");
+        &NAME
+    }
+}
+
+impl<S> Mutator<BytesInput, S> for SuffixMutator
+where
+    S: HasRand,
+{
+    fn mutate(&mut self, state: &mut S, input: &mut BytesInput) -> Result<MutationResult, libafl::Error> {
+        let bytes = input.mutator_bytes_mut();
+        let aligned_len = bytes.len() - (bytes.len() % TICK_SIZE);
+        let tick_count = aligned_len / TICK_SIZE;
+        if tick_count == 0 {
+            return Ok(MutationResult::Skipped);
+        }
+
+        // Bias split heavily toward the end: keep 70-90% prefix unchanged.
+        let keep_percent = 70 + state.rand_mut().below_or_zero(21); // [70, 90]
+        let keep_ticks = ((tick_count * keep_percent as usize) / 100).min(tick_count.saturating_sub(1));
+        let split_idx = keep_ticks * TICK_SIZE;
+
+        let suffix = &mut bytes[split_idx..aligned_len];
+        if suffix.is_empty() {
+            return Ok(MutationResult::Skipped);
+        }
+
+        // Basic havoc operations on suffix only.
+        let op_count = 1 + state.rand_mut().below_or_zero(8);
+        for _ in 0..op_count {
+            let idx = state.rand_mut().below_or_zero(suffix.len());
+            match state.rand_mut().below_or_zero(3) {
+                0 => {
+                    // Bit flip
+                    let bit = 1u8 << state.rand_mut().below_or_zero(8);
+                    suffix[idx] ^= bit;
+                }
+                1 => {
+                    // Byte replacement
+                    suffix[idx] = state.rand_mut().below_or_zero(256) as u8;
+                }
+                _ => {
+                    // Small arithmetic mutation
+                    let delta = 1 + state.rand_mut().below_or_zero(16) as u8;
+                    if state.rand_mut().below_or_zero(2) == 0 {
+                        suffix[idx] = suffix[idx].wrapping_add(delta);
+                    } else {
+                        suffix[idx] = suffix[idx].wrapping_sub(delta);
+                    }
+                }
+            }
+        }
+
+        TickGuidedMutator::clamp_cmd_bit(suffix);
         Ok(MutationResult::Mutated)
     }
 
@@ -303,10 +376,12 @@ pub fn run() {
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     let guided_mutator = TickGuidedMutator::new();
+    let suffix_mutator = SuffixMutator::new();
     let havoc_mutator = HavocScheduledMutator::new(havoc_mutations());
     let mut stages = tuple_list!(
         calibration,
         StdPowerMutationalStage::new(guided_mutator),
+        StdPowerMutationalStage::new(suffix_mutator),
         StdPowerMutationalStage::new(havoc_mutator)
     );
 
@@ -322,32 +397,47 @@ pub fn run() {
         unsafe {
             harness_reset_plc();
 
+            let metrics_ptr = core::ptr::addr_of_mut!(PLC_METRICS);
+            (*metrics_ptr).fill(0);
+
             // Keep execution aligned to whole PLC ticks.
             let aligned_len = buf.len() - (buf.len() % input_size);
-            if aligned_len != 0 {
-                harness_fuzz_time_series(buf.as_ptr(), aligned_len, input_size);
+            let mut current_state = PipelineState::default();
+            let mut max_fill_head = 0i32;
+            let mut best_bucket: i32 = -1;
+            let mut best_zone_score = 0u8;
+
+            for tick in buf[..aligned_len].chunks_exact(TICK_SIZE) {
+                plc_step(tick.as_ptr(), TICK_SIZE);
+
+                plc_get_full_state(
+                    &mut current_state as *mut _ as *mut u8,
+                    size_of::<PipelineState>(),
+                );
+
+                max_fill_head = max_fill_head.max(current_state.fill_head.max(0));
+
+                let current_pv = (tick[0] as i32) + (tick[1] as i32);
+                let pipe_temp = tick[2] as i32;
+                let zone_score = zone_validity_score(current_state.fill_head, current_pv, pipe_temp);
+                let bucket = (current_state.fill_head.max(0) / 8).min(7);
+
+                if bucket > best_bucket {
+                    best_bucket = bucket;
+                    best_zone_score = zone_score;
+                } else if bucket == best_bucket {
+                    best_zone_score = best_zone_score.max(zone_score);
+                }
             }
 
-            let mut current_state = PipelineState::default();
-            plc_get_full_state(&mut current_state as *mut _ as *mut u8, size_of::<PipelineState>());
-
-            let metrics_ptr = core::ptr::addr_of_mut!(PLC_METRICS);
             let flow_ready = (current_state.flow_accum > 6) as u8;
             let press_ready = (current_state.press_accum > 5) as u8;
             let temp_ready = (current_state.temp_accum > 6) as u8;
 
-            let mut zone_score = 0u8;
-            if current_state.phase == 3 && aligned_len >= TICK_SIZE {
-                let last_tick = &buf[aligned_len - TICK_SIZE..aligned_len];
-                let current_pv = (last_tick[0] as i32) + (last_tick[1] as i32);
-                let pipe_temp = last_tick[2] as i32;
-                zone_score = zone_validity_score(current_state.fill_head, current_pv, pipe_temp);
-            }
-
             (*metrics_ptr)[0] = current_state.phase.min(3) as u8;
             (*metrics_ptr)[1] = bucketize_nonneg(current_state.prime_score, 2, 15);
             (*metrics_ptr)[2] = bucketize_nonneg(current_state.flux_score, 2, 15);
-            (*metrics_ptr)[3] = bucketize_nonneg(current_state.fill_head, 8, 8);
+            (*metrics_ptr)[3] = max_fill_head.min(255) as u8;
             (*metrics_ptr)[4] = flow_ready;
             (*metrics_ptr)[5] = press_ready;
             (*metrics_ptr)[6] = temp_ready;
@@ -356,7 +446,12 @@ pub fn run() {
             (*metrics_ptr)[9] = bucketize_nonneg(current_state.phase_counter, 8, 31);
             (*metrics_ptr)[10] = bucketize_nonneg(current_state.cycle_count, 16, 255);
             (*metrics_ptr)[11] = bucketize_nonneg(current_state.pv_sum, 8, 31);
-            (*metrics_ptr)[12] = zone_score;
+            (*metrics_ptr)[12] = if best_bucket >= 0 { (best_bucket as u8) + 1 } else { 0 };
+
+            if best_bucket >= 0 {
+                let zone_metric_idx = 13 + (best_bucket as usize);
+                (*metrics_ptr)[zone_metric_idx] = best_zone_score;
+            }
         }
         libafl::executors::ExitKind::Ok
     };
@@ -374,13 +469,13 @@ pub fn run() {
     }
 
     // Phase 2: use tick-aligned random seeds at multiple sequence scales.
-    let mut short_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 32).unwrap());
+    let mut short_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 64).unwrap());
     state.generate_initial_inputs(&mut fuzzer, &mut executor, &mut short_gen, &mut mgr, 2).unwrap();
 
-    let mut medium_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 128).unwrap());
+    let mut medium_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 256).unwrap());
     state.generate_initial_inputs(&mut fuzzer, &mut executor, &mut medium_gen, &mut mgr, 2).unwrap();
 
-    let mut long_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 300).unwrap());
+    let mut long_gen = RandBytesGenerator::new(NonZeroUsize::new(input_size * 900).unwrap());
     state.generate_initial_inputs(&mut fuzzer, &mut executor, &mut long_gen, &mut mgr, 2).unwrap();
 
     fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr).unwrap();

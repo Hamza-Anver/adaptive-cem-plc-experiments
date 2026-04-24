@@ -130,7 +130,7 @@ void plc_step(const uint8_t* inputs, size_t size) {
             int32_t current_pv = (int32_t)pump_rate + (int32_t)valve_pos;
             bool fail = false;
 
-            if (state.fill_head < 8) { 
+            if (state.fill_head < 90) { 
                 if (current_pv < 60 || current_pv > 90 || pipe_temp < 50 || pipe_temp > 65) fail = true;
             } else if (state.fill_head < 16) {
                 if (current_pv < 80 || current_pv > 110 || pipe_temp < 62 || pipe_temp > 77) fail = true;
