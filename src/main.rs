@@ -29,9 +29,8 @@ macro_rules! fuzzer_registry {
 
 
 fuzzer_registry!(
-    simple_stateless
-    // Add new ones here separated by commas, e.g.:
-    // stateless, stateful, custom_ml
+    simple_stateless, 
+    simple_stateful
 );
 
 fn main() {
