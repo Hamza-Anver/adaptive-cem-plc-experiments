@@ -18,7 +18,7 @@ use libafl_bolts::{AsSlice, rands::StdRand, tuples::tuple_list};
 use libafl_targets::std_edges_map_observer;
 
 // Import our C bindings from common.rs
-use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_one_tick};
+use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_one_tick, plc_get_input_size};
 
 pub fn run() {
     println!("Starting Simple Stateless Fuzzer...");
@@ -51,13 +51,15 @@ pub fn run() {
         harness_boot_plc();
     }
 
+    let input_size = unsafe { plc_get_input_size() };
+
     // The execution harness
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
         unsafe {
             harness_reset_plc();
-            harness_fuzz_one_tick(buf.as_ptr(), buf.len());
+            harness_fuzz_one_tick(buf.as_ptr(), input_size);
         }
         libafl::executors::ExitKind::Ok
     };
@@ -72,7 +74,7 @@ pub fn run() {
     .unwrap();
 
     // Generate initial seeds
-    let mut generator = RandBytesGenerator::new(NonZeroUsize::new(64).unwrap());
+    let mut generator = RandBytesGenerator::new(NonZeroUsize::new(input_size).unwrap());
     state
         .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 1)
         .unwrap();

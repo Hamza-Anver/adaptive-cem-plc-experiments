@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#define INPUT_SIZE 1
+
 typedef struct {
     uint32_t accumulator;
     uint8_t log[8];
@@ -16,6 +18,10 @@ void plc_init(void) {
 
 void plc_reset(void) {
     memset(&state, 0, sizeof(StatefulOobState));
+}
+
+size_t plc_get_input_size(void) {
+    return INPUT_SIZE;
 }
 
 void plc_step(const uint8_t* inputs, size_t size) {

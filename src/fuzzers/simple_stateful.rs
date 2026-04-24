@@ -17,7 +17,9 @@ use libafl::{
 use libafl_bolts::{AsSlice, rands::StdRand, tuples::tuple_list};
 use libafl_targets::std_edges_map_observer;
 
-use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_time_series};
+use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_time_series, plc_get_input_size};
+
+const SEQUENCE_LENGTH: usize = 16;
 
 pub fn run() {
     println!("Starting Stateful Sequence Fuzzer...");
@@ -49,6 +51,8 @@ pub fn run() {
         harness_boot_plc();
     }
 
+    let input_size = unsafe { plc_get_input_size() };
+
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
@@ -57,7 +61,7 @@ pub fn run() {
             harness_reset_plc();
             
             // Execute the payload as a time-series of 1-byte scan cycles
-            harness_fuzz_time_series(buf.as_ptr(), buf.len(), 2);
+            harness_fuzz_time_series(buf.as_ptr(), buf.len(), input_size);
         }
         libafl::executors::ExitKind::Ok
     };
@@ -71,7 +75,7 @@ pub fn run() {
     )
     .unwrap();
 
-    let mut generator = RandBytesGenerator::new(NonZeroUsize::new(64).unwrap());
+    let mut generator = RandBytesGenerator::new(NonZeroUsize::new(input_size * SEQUENCE_LENGTH).unwrap());
     state
         .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 1)
         .unwrap();

@@ -2,6 +2,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#define INPUT_SIZE 2
+
 // A simple state containing only the vulnerable array
 typedef struct {
     uint8_t buffer[8];
@@ -10,6 +13,10 @@ typedef struct {
 static OobState state;
 
 // --- Execution API ---
+size_t plc_get_input_size(void) {
+    return INPUT_SIZE;
+}
+
 
 void plc_init(void) {
     memset(&state, 0, sizeof(OobState));

@@ -34,6 +34,7 @@ bool   plc_set_full_state(const uint8_t* in_buffer, size_t size);
 // Execution
 void plc_init(void);
 void plc_reset(void);
+size_t plc_get_input_size(void);
 void plc_step(const uint8_t* inputs, size_t size);
 
 
