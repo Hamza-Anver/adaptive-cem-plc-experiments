@@ -8,5 +8,4 @@ unsafe extern "C" {
 
     // Greybox tools
     pub fn plc_get_full_state(out_buffer: *mut u8, max_size: usize) -> usize;
-    pub fn plc_get_key_state(out_buffer: *mut u8, max_size: usize) -> usize;
 }
