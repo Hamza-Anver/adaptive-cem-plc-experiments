@@ -20,19 +20,25 @@ use libafl_targets::std_edges_map_observer;
 
 // Define the C function interface directly to bypass the wrappers
 unsafe extern "C" {
-    unsafe fn LLVMFuzzerTestOneInput(data: *const u8, size: usize) -> i32;
+    unsafe fn harness_boot_plc();
+    unsafe fn harness_reset_plc();
+    unsafe fn harness_fuzz_one_tick(data: *const u8, size: usize) -> i32;
+    unsafe fn harness_fuzz_time_series(data: *const u8, size: usize, bytes_per_tick: usize) -> i32;
+    
+    // Greybox tools
+    unsafe fn plc_get_full_state(out_buffer: *mut u8, max_size: usize) -> usize;
 }
 
 
 fn main() {
-    // 1. Observer
+    // Observer
     let edges_observer = unsafe { std_edges_map_observer("edges") };
 
-    // 2. Feedback
+    // Feedback
     let mut feedback = MaxMapFeedback::new(&edges_observer);
     let mut objective = CrashFeedback::new();
 
-    // 3. State
+    // State
     let mut state = StdState::new(
         StdRand::with_seed(0),
         InMemoryCorpus::new(),
@@ -42,25 +48,30 @@ fn main() {
     )
     .unwrap();
 
-    // 4. Scheduler & Mutator
+    // Scheduler & Mutator
     let scheduler = QueueScheduler::new();
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     let mutator = HavocScheduledMutator::new(havoc_mutations());
 
-    // FIX 2: Wrap the mutator in a Stage, and put the Stage in a tuple list
+    // Wrap the mutator in a Stage, and put the Stage in a tuple list
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
-    // 5. Monitor & Event Manager
+    // Monitor & Event Manager
     let monitor = SimpleMonitor::new(|s| println!("{}", s));
     let mut mgr = SimpleEventManager::new(monitor);
 
-    // 6. Harness
+    unsafe {
+        harness_boot_plc();
+    }
+
+    // Harness
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
         unsafe {
-            LLVMFuzzerTestOneInput(buf.as_ptr(), buf.len());
+            harness_reset_plc();
+            harness_fuzz_one_tick(buf.as_ptr(), buf.len());
         }
         libafl::executors::ExitKind::Ok
     };
