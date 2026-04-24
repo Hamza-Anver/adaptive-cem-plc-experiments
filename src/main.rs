@@ -4,7 +4,7 @@ use libafl::{
     corpus::{InMemoryCorpus, OnDiskCorpus},
     events::SimpleEventManager,
     executors::inprocess::InProcessExecutor,
-    feedbacks::MaxMapFeedback,
+    feedbacks::{MaxMapFeedback, CrashFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandBytesGenerator,
     inputs::{BytesInput, HasTargetBytes},
@@ -26,12 +26,11 @@ unsafe extern "C" {
 
 fn main() {
     // 1. Observer
-
     let edges_observer = unsafe { std_edges_map_observer("edges") };
 
     // 2. Feedback
     let mut feedback = MaxMapFeedback::new(&edges_observer);
-    let mut objective = ();
+    let mut objective = CrashFeedback::new();
 
     // 3. State
     let mut state = StdState::new(
