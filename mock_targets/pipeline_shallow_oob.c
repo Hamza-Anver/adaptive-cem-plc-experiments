@@ -31,6 +31,13 @@ typedef struct {
 
 static PipelineState state;
 
+typedef struct {
+    Phase phase;
+    int32_t fill_head;
+    int32_t prime_score;
+    int32_t flux_score;
+} PipelineKeyState;
+
 static const PlcVarMeta METADATA_DICT[] = {
     {"phase",         PLC_TYPE_UINT32, sizeof(Phase),   offsetof(PipelineState, phase),         true},
     {"fill_head",     PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, fill_head),     true},
@@ -159,6 +166,18 @@ size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     if (max_size < sizeof(PipelineState)) return 0;
     memcpy(out_buffer, &state, sizeof(PipelineState));
     return sizeof(PipelineState);
+}
+
+size_t plc_get_key_state(uint8_t* out_buffer, size_t max_size) {
+    if (max_size < sizeof(PipelineKeyState)) return 0;
+    PipelineKeyState key = {
+        .phase = state.phase,
+        .fill_head = state.fill_head,
+        .prime_score = state.prime_score,
+        .flux_score = state.flux_score,
+    };
+    memcpy(out_buffer, &key, sizeof(PipelineKeyState));
+    return sizeof(PipelineKeyState);
 }
 
 bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {

@@ -44,6 +44,9 @@ void plc_step(const uint8_t* inputs, size_t size) {
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     (void)out_buffer; (void)max_size; return 0;
 }
+size_t plc_get_key_state(uint8_t* out_buffer, size_t max_size) {
+    (void)out_buffer; (void)max_size; return 0;
+}
 bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {
     (void)in_buffer; (void)size; return false;
 }

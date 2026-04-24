@@ -24,6 +24,12 @@ typedef struct {
 
 static PumpState state;
 
+typedef struct {
+    PumpMode mode;
+    int32_t pressure_score;
+    int32_t offset;
+} PumpKeyState;
+
 static const PlcVarMeta METADATA_DICT[] = {
     {"mode",           PLC_TYPE_UINT32, sizeof(PumpMode), offsetof(PumpState, mode),           true},
     {"cycle_count",    PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, cycle_count),    false},
@@ -128,6 +134,17 @@ size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     if (max_size < sizeof(PumpState)) return 0;
     memcpy(out_buffer, &state, sizeof(PumpState));
     return sizeof(PumpState);
+}
+
+size_t plc_get_key_state(uint8_t* out_buffer, size_t max_size) {
+    if (max_size < sizeof(PumpKeyState)) return 0;
+    PumpKeyState key = {
+        .mode = state.mode,
+        .pressure_score = state.pressure_score,
+        .offset = state.offset,
+    };
+    memcpy(out_buffer, &key, sizeof(PumpKeyState));
+    return sizeof(PumpKeyState);
 }
 
 bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {

@@ -26,6 +26,7 @@ typedef struct {
 
 // Memory Map Introspection
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size);
+size_t plc_get_key_state(uint8_t* out_buffer, size_t max_size);
 bool   plc_set_full_state(const uint8_t* in_buffer, size_t size);
 
 // Execution

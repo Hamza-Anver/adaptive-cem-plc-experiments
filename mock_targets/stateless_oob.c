@@ -55,10 +55,20 @@ void plc_step(const uint8_t* inputs, size_t size) {
 // the metadata to the fuzzer for this specific target.
 
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
+    (void)out_buffer;
+    (void)max_size;
+    return 0;
+}
+
+size_t plc_get_key_state(uint8_t* out_buffer, size_t max_size) {
+    (void)out_buffer;
+    (void)max_size;
     return 0;
 }
 
 bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {
+    (void)in_buffer;
+    (void)size;
     return false;
 }
 
@@ -67,5 +77,7 @@ size_t plc_get_var_count(void) {
 }
 
 bool plc_get_var_meta(size_t index, PlcVarMeta* out_meta) {
+    (void)index;
+    (void)out_meta;
     return false;
 }
