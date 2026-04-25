@@ -1,4 +1,4 @@
-use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_time_series};
+use crate::common::{boot_plc, reset_plc, step_time_series};
 
 fn append_ticks(
     buf: &mut Vec<u8>,
@@ -70,11 +70,9 @@ pub fn run() {
     println!("Sequence built. Total ticks: {}, Total bytes: {}", seq.len() / 7, seq.len());
     println!("Executing payload...");
 
-    unsafe {
-        harness_boot_plc();
-        harness_reset_plc();
-        harness_fuzz_time_series(seq.as_ptr(), seq.len(), 7);
-    }
+    boot_plc();
+    reset_plc();
+    step_time_series(&seq, 7);
 
     println!("Sequence completed. If you see this, the target did NOT crash.");
 }

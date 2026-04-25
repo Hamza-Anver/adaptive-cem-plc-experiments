@@ -17,7 +17,7 @@ use libafl::{
 use libafl_bolts::{AsSlice, rands::StdRand, tuples::tuple_list};
 use libafl_targets::std_edges_map_observer;
 
-use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_time_series, plc_get_input_size};
+use crate::common::{boot_plc, reset_plc, step_time_series, input_size};
 
 const SEQUENCE_LENGTH: usize = 1024;
 
@@ -47,24 +47,17 @@ pub fn run() {
     let monitor = SimpleMonitor::new(|s| println!("{}", s));
     let mut mgr = SimpleEventManager::new(monitor);
 
-    unsafe {
-        harness_boot_plc();
-    }
+    boot_plc();
 
-    let input_size = unsafe { plc_get_input_size() };
+    let input_size = input_size();
 
     println!("Input size per tick: {} bytes", input_size);
 
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        unsafe {
-            // Reset the PLC state at the beginning of the sequence
-            harness_reset_plc();
-            
-            // Execute the payload as a time-series of 1-byte scan cycles
-            harness_fuzz_time_series(buf.as_ptr(), buf.len(), input_size);
-        }
+        reset_plc();
+        step_time_series(buf, input_size);
         libafl::executors::ExitKind::Ok
     };
 

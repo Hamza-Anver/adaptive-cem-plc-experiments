@@ -23,10 +23,7 @@ use libafl_bolts::{AsSlice, Named, rands::Rand, rands::StdRand, tuples::tuple_li
 use libafl_targets::std_edges_map_observer;
 use libafl::observers::{CanTrack, StdMapObserver};
 
-use crate::common::{
-    harness_boot_plc, harness_reset_plc,
-    plc_get_full_state, plc_get_input_size, plc_step,
-};
+use crate::common::{boot_plc, reset_plc, plc_get_full_state, plc_get_input_size, plc_step};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -388,14 +385,14 @@ pub fn run() {
     let monitor = SimpleMonitor::new(|s| println!("{}", s));
     let mut mgr = SimpleEventManager::new(monitor);
 
-    unsafe { harness_boot_plc(); }
+    boot_plc();
     let input_size = unsafe { plc_get_input_size() };
 
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
         unsafe {
-            harness_reset_plc();
+            reset_plc();
 
             let metrics_ptr = core::ptr::addr_of_mut!(PLC_METRICS);
             (*metrics_ptr).fill(0);

@@ -17,8 +17,8 @@ use libafl::{
 use libafl_bolts::{AsSlice, rands::StdRand, tuples::tuple_list};
 use libafl_targets::std_edges_map_observer;
 
-// Import our C bindings from common.rs
-use crate::common::{harness_boot_plc, harness_reset_plc, harness_fuzz_one_tick, plc_get_input_size};
+// Import Rust-owned helpers from common.rs
+use crate::common::{boot_plc, reset_plc, step, input_size};
 
 pub fn run() {
     println!("Starting Simple Stateless Fuzzer...");
@@ -47,20 +47,16 @@ pub fn run() {
     let mut mgr = SimpleEventManager::new(monitor);
 
     // Boot the PLC hardware once
-    unsafe {
-        harness_boot_plc();
-    }
+    boot_plc();
 
-    let input_size = unsafe { plc_get_input_size() };
+    let input_size = input_size();
 
     // The execution harness
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        unsafe {
-            harness_reset_plc();
-            harness_fuzz_one_tick(buf.as_ptr(), input_size);
-        }
+        reset_plc();
+        step(&buf[..input_size]);
         libafl::executors::ExitKind::Ok
     };
 

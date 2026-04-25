@@ -36,16 +36,4 @@ void plc_reset(void);
 size_t plc_get_input_size(void);
 void plc_step(const uint8_t* inputs, size_t size);
 
-// Cold boot the PLC hardware (Run once at startup)
-void harness_boot_plc(void);
-
-// Wipe transient state for a fresh fuzzing run
-void harness_reset_plc(void);
-
-// The main replacement for LLVMFuzzerTestOneInput. Executes one scan cycle.
-int harness_fuzz_one_tick(const uint8_t *data, size_t size);
-
-// Execute a series of scan cycles from a single payload (Time-series fuzzing)
-int harness_fuzz_time_series(const uint8_t *data, size_t size, size_t bytes_per_tick);
-
 #endif // MOCK_PLC_H

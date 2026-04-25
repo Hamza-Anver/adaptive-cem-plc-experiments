@@ -18,12 +18,12 @@ pub struct PlcVarMeta {
     pub offset: usize,
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 unsafe extern "C" {
-    pub fn harness_boot_plc();
-    pub fn harness_reset_plc();
-    pub fn harness_fuzz_one_tick(data: *const u8, size: usize) -> i32;
-    pub fn harness_fuzz_time_series(data: *const u8, size: usize, bytes_per_tick: usize) -> i32;
     pub fn plc_get_input_size() -> usize;
+    pub fn plc_init();
+    pub fn plc_reset();
     pub fn plc_step(inputs: *const u8, size: usize);
 
     pub fn plc_get_full_state_size() -> usize;
@@ -35,15 +35,18 @@ unsafe extern "C" {
 
 #[allow(dead_code)]
 pub fn boot_plc() {
-    unsafe {
-        harness_boot_plc();
+    static BOOTED: AtomicBool = AtomicBool::new(false);
+    if !BOOTED.swap(true, Ordering::AcqRel) {
+        unsafe {
+            plc_init();
+        }
     }
 }
 
 #[allow(dead_code)]
 pub fn reset_plc() {
     unsafe {
-        harness_reset_plc();
+        plc_reset();
     }
 }
 
@@ -60,8 +63,14 @@ pub fn step(inputs: &[u8]) {
 
 #[allow(dead_code)]
 pub fn step_time_series(inputs: &[u8], bytes_per_tick: usize) {
-    unsafe {
-        harness_fuzz_time_series(inputs.as_ptr(), inputs.len(), bytes_per_tick);
+    if bytes_per_tick == 0 {
+        return;
+    }
+
+    let mut offset = 0;
+    while offset + bytes_per_tick <= inputs.len() {
+        step(&inputs[offset..offset + bytes_per_tick]);
+        offset += bytes_per_tick;
     }
 }
 
