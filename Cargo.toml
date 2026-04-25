@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "libafl_sandbox"
-crate-type = ["rlib"]
+crate-type = ["cdylib"]
 
 [[bin]]
 name = "libafl_sandbox"
