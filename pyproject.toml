@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=0.15,<0.16"]
+build-backend = "maturin"
+
+[project]
+name = "libafl_sandbox"
+version = "0.1.0"
+description = "LibAFL Sandbox - Fuzzing framework with Python bindings"
+authors = [{name = "LibAFL Sandbox Contributors"}]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[tool.maturin]
+python-source = "src"
+features = ["python"]
+

@@ -1,12 +1,24 @@
 [package]
 name = "libafl_sandbox"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+name = "libafl_sandbox"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "libafl_sandbox"
+path = "src/bin/main.rs"
 
 [dependencies]
 libafl = "0.15.4"
 libafl_bolts = "0.15.4"
 libafl_targets = { version = "0.15.4", features = ["sancov_pcguard_edges"] }
+pyo3 = { version = "0.20", features = ["extension-module"], optional = true }
 
 [build-dependencies]
 cc = "1.2.60"
+
+[features]
+python = ["pyo3"]
