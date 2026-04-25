@@ -2,7 +2,7 @@ use std::env;
 
 fn main() {
     // 1. Read the environment variable, default to "boiler_plc" if none is provided.
-    let target = env::var("PLC_TARGET").unwrap_or_else(|_| "boiler_plc".to_string());
+    let target = env::var("PLC_TARGET").unwrap_or_else(|_| "pipeline_deep_oob".to_string());
     let target_file = format!("mock_targets/{}.c", target);
 
     // 2. Compile the Harness + The Dynamic Target

@@ -32,12 +32,12 @@ typedef struct {
 static PipelineState state;
 
 static const PlcVarMeta METADATA_DICT[] = {
-    {"phase",         PLC_TYPE_UINT32, sizeof(Phase),   offsetof(PipelineState, phase),         true},
-    {"fill_head",     PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, fill_head),     true},
-    {"prime_score",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, prime_score),   true},
-    {"flux_score",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flux_score),    true},
-    {"flow_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flow_accum),    false},
-    {"status",        PLC_TYPE_UINT8,  sizeof(int8_t),  offsetof(PipelineState, status),        false}
+    {"phase",         PLC_TYPE_UINT32, sizeof(Phase),   offsetof(PipelineState, phase)},
+    {"fill_head",     PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, fill_head)},
+    {"prime_score",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, prime_score)},
+    {"flux_score",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flux_score)},
+    {"flow_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flow_accum)},
+    {"status",        PLC_TYPE_UINT8,  sizeof(int8_t),  offsetof(PipelineState, status)}
 };
 
 void plc_init(void) {
@@ -154,6 +154,10 @@ void plc_step(const uint8_t* inputs, size_t size) {
 }
 
 // --- Memory Map Introspection ---
+
+size_t plc_get_full_state_size(void) {
+    return sizeof(PipelineState);
+}
 
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     if (max_size < sizeof(PipelineState)) return 0;

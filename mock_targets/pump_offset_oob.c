@@ -25,12 +25,12 @@ typedef struct {
 static PumpState state;
 
 static const PlcVarMeta METADATA_DICT[] = {
-    {"mode",           PLC_TYPE_UINT32, sizeof(PumpMode), offsetof(PumpState, mode),           true},
-    {"cycle_count",    PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, cycle_count),    false},
-    {"pressure_score", PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, pressure_score), true},
-    {"armed_cycles",   PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, armed_cycles),   false},
-    {"offset",         PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, offset),         true},
-    {"status",         PLC_TYPE_UINT8,  sizeof(int8_t),   offsetof(PumpState, status),         false}
+    {"mode",           PLC_TYPE_UINT32, sizeof(PumpMode), offsetof(PumpState, mode)},
+    {"cycle_count",    PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, cycle_count)},
+    {"pressure_score", PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, pressure_score)},
+    {"armed_cycles",   PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, armed_cycles)},
+    {"offset",         PLC_TYPE_UINT32, sizeof(int32_t),  offsetof(PumpState, offset)},
+    {"status",         PLC_TYPE_UINT8,  sizeof(int8_t),   offsetof(PumpState, status)}
 };
 
 static void reset_runtime_state(void) {
@@ -127,6 +127,10 @@ void plc_step(const uint8_t* inputs, size_t size) {
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     if (max_size < sizeof(PumpState)) return 0;
     memcpy(out_buffer, &state, sizeof(PumpState));
+    return sizeof(PumpState);
+}
+
+size_t plc_get_full_state_size(void) {
     return sizeof(PumpState);
 }
 

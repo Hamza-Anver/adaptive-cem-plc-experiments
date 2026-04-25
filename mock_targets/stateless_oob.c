@@ -58,6 +58,10 @@ size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size) {
     return 0;
 }
 
+size_t plc_get_full_state_size(void) {
+    return sizeof(OobState);
+}
+
 bool plc_set_full_state(const uint8_t* in_buffer, size_t size) {
     return false;
 }

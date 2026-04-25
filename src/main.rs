@@ -56,9 +56,7 @@ fn main() {
 
 
 
-use crate::common::{
-    get_all_var_metadata, get_key_var_metadata, get_var_vec_to_hashmap, get_var_vec_to_flat_var_vec
-};
+use crate::common::{full_state, full_state_size, get_all_var_metadata, input_size, set_full_state};
 // Check that the common rs functions are valid
 #[cfg(test)]
 mod tests {
@@ -67,46 +65,42 @@ mod tests {
     #[test]
     fn test_get_all_var_metadata() {
         let metadata = get_all_var_metadata();
-        assert!(!metadata.is_empty(), "Expected to retrieve some variable metadata");
-        println!("Retrieved {} variables from metadata", metadata.len());   
+        let count = metadata.len();
+        println!("Retrieved {} variables from metadata", count);
         for var in metadata.iter() {
             let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
-            println!("Variable: {}, Type: {:#?}, Size: {}, Offset: {}, Is Key: {}", 
-                name, var.var_type, var.size, var.offset, var.is_key);
-        }
-    }
-
-    #[test]
-    fn test_get_key_var_metadata() {
-        let key_metadata = get_key_var_metadata();
-        assert!(!key_metadata.is_empty(), "Expected to retrieve some key variable metadata");
-        println!("Retrieved {} key variables from metadata", key_metadata.len());   
-        for var in key_metadata.iter() {
-            let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
-            println!("Key Variable: {}, Type: {:#?}, Size: {}, Offset: {}", 
+            println!("Variable: {}, Type: {:#?}, Size: {}, Offset: {}",
                 name, var.var_type, var.size, var.offset);
         }
     }
 
     #[test]
-    fn test_get_var_vec_to_hashmap() {
-        let metadata = get_all_var_metadata();
-        let state_map = get_var_vec_to_hashmap(metadata);
-        assert!(!state_map.is_empty(), "Expected to retrieve some variable states");
-        println!("Retrieved state for {} variables", state_map.len());
-        for (name, value) in state_map.iter() {
-            // FIX: is this printing the right thing
-            println!("Variable: {}, Value: {:#?}", name, value.to_ascii_lowercase());
+    fn test_input_and_state_contract() {
+        let size = input_size();
+        assert!(size > 0, "Expected a positive input size");
+
+        let state_size = full_state_size();
+        let state = full_state();
+
+        if state_size == 0 {
+            assert!(state.is_empty(), "Expected empty state when the target does not expose introspection");
+            return;
         }
+
+        assert_eq!(state_size, state.len(), "State helper should return the advertised size");
+        assert!(set_full_state(&state), "Setting the captured state back should succeed");
+
+        let round_trip = full_state();
+        assert_eq!(state.len(), round_trip.len(), "Round-tripped state should keep the same size");
     }
 
     #[test]
-    fn test_get_var_vec_to_flat_var_vec() {
-        println!("Testing get_var_vec_to_flat_var_vec...");
+    fn test_metadata_is_self_consistent() {
         let metadata = get_all_var_metadata();
-        let state_vec = get_var_vec_to_flat_var_vec(metadata);
-        assert!(!state_vec.is_empty(), "Expected to retrieve some variable states");
-        println!("Retrieved state vector with length {}", state_vec.len());
-        println!("State Vector: {:#?}", state_vec);
+        for var in metadata.iter() {
+            let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
+            assert!(!name.is_empty(), "Metadata entries should have a readable name");
+            assert!(var.size > 0, "Metadata entries should have a non-zero size");
+        }
     }
 }

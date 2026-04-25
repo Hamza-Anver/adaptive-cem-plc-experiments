@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// The Data Types your fuzzer understands
+// The Data Types used by metadata introspection
 typedef enum {
     PLC_TYPE_UINT8  = 0,
     PLC_TYPE_UINT16 = 1,
@@ -14,17 +14,17 @@ typedef enum {
     PLC_TYPE_FLOAT  = 4
 } PlcVarType;
 
-// The Metadata Dictionary Entry
+// Metadata dictionary entry
 typedef struct {
-    char name[32];      // Human-readable variable name (e.g., "temperature")
-    PlcVarType type;    // How the fuzzer should interpret the bytes
-    size_t size;        // Length in bytes (e.g., 4 for UINT32)
-    size_t offset;      // Exact byte offset within the FULL state buffer
-    bool is_key;        // Flag to tell the fuzzer if this is a priority variable for ML
+    char name[32];
+    PlcVarType type;
+    size_t size;
+    size_t offset;
 } PlcVarMeta;
 
 
-// Memory Map Introspection
+// State introspection
+size_t plc_get_full_state_size(void);
 size_t plc_get_full_state(uint8_t* out_buffer, size_t max_size);
 bool   plc_set_full_state(const uint8_t* in_buffer, size_t size);
 bool   plc_get_var_meta(size_t index, PlcVarMeta* out);
