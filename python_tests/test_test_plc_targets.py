@@ -30,6 +30,9 @@ def verify_common(session) -> None:
     metadata = session.var_metadata()
     require(len(metadata) > 0, "expected non-empty metadata")
 
+    input_hints = session.input_hints()
+    require(len(input_hints) == session.input_size(), "input_hints count should match input_size")
+
     values = session.read_vars()
     require(isinstance(values, dict), "read_vars should return a dict")
     require(len(values) == len(metadata), "value count should match metadata count")

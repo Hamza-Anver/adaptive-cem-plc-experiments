@@ -12,6 +12,11 @@ typedef struct {
 
 static OobState state;
 
+static const PlcVarMeta INPUT_HINTS[] = {
+    {"index", PLC_TYPE_UINT8, sizeof(uint8_t), 0},
+    {"value", PLC_TYPE_UINT8, sizeof(uint8_t), 1},
+};
+
 // --- Execution API ---
 size_t plc_get_input_size(void) {
     return INPUT_SIZE;
@@ -72,4 +77,14 @@ size_t plc_get_var_count(void) {
 
 bool plc_get_var_meta(size_t index, PlcVarMeta* out_meta) {
     return false;
+}
+
+size_t plc_get_input_hint_count(void) {
+    return sizeof(INPUT_HINTS) / sizeof(INPUT_HINTS[0]);
+}
+
+bool plc_get_input_hint_meta(size_t index, PlcVarMeta* out_meta) {
+    if (index >= plc_get_input_hint_count() || !out_meta) return false;
+    memcpy(out_meta, &INPUT_HINTS[index], sizeof(PlcVarMeta));
+    return true;
 }

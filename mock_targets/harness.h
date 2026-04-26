@@ -30,6 +30,10 @@ bool   plc_set_full_state(const uint8_t* in_buffer, size_t size);
 bool   plc_get_var_meta(size_t index, PlcVarMeta* out);
 size_t plc_get_var_count(void);
 
+// Input hint introspection
+bool   plc_get_input_hint_meta(size_t index, PlcVarMeta* out);
+size_t plc_get_input_hint_count(void);
+
 // Execution
 void plc_init(void);
 void plc_reset(void);

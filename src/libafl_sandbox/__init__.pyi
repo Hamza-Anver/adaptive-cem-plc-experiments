@@ -86,6 +86,9 @@ class TargetSession:
     def var_metadata(self) -> list[PlcVarMeta]:
         """Return metadata for all exposed variables."""
 
+    def input_hints(self) -> list[PlcVarMeta]:
+        """Return metadata for expected input fields per step."""
+
     def read_vars(self, names: list[str] | None = None) -> dict[str, VarValue]:
         """Return variables as a dict.
 

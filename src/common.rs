@@ -32,6 +32,8 @@ unsafe extern "C" {
     pub fn plc_get_var_meta(index: usize, out: *mut PlcVarMeta) -> bool;
     pub fn plc_get_var_count() -> usize;
     pub fn plc_set_full_state(in_buffer: *const u8, size: usize) -> bool;
+    pub fn plc_get_input_hint_meta(index: usize, out: *mut PlcVarMeta) -> bool;
+    pub fn plc_get_input_hint_count() -> usize;
 }
 
 #[allow(dead_code)]
@@ -114,6 +116,25 @@ pub fn all_var_metadata() -> Vec<PlcVarMeta> {
         }
     }
     metadata_list
+}
+
+pub fn all_input_hints() -> Vec<PlcVarMeta> {
+    let mut hint_list = Vec::new();
+    unsafe {
+        let hint_count = plc_get_input_hint_count();
+        for i in 0..hint_count {
+            let mut meta = PlcVarMeta {
+                name: [0; 32],
+                var_type: PlcVarType::UINT8,
+                size: 0,
+                offset: 0,
+            };
+            if plc_get_input_hint_meta(i, &mut meta as *mut PlcVarMeta) {
+                hint_list.push(meta);
+            }
+        }
+    }
+    hint_list
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -43,11 +43,20 @@ def main():
         else:
             print("      (No variables returned)")
 
-        print("\n[6] Reading variables as a dict...")
+        print("\n[6] Reading input hints...")
+        input_hints = session.input_hints()
+        print(f"    Found {len(input_hints)} input hints")
+        if len(input_hints) != input_sz:
+            raise RuntimeError("input_hints count should match input_size for byte-oriented targets")
+        if input_hints:
+            for hint in input_hints:
+                print(f"      - {hint}")
+
+        print("\n[7] Reading variables as a dict...")
         vars_before = session.read_vars()
         print(f"    Read {len(vars_before)} variables via dict API")
 
-        print("\n[7] Setting one variable from dict...")
+        print("\n[8] Setting one variable from dict...")
         phase_before = int(vars_before["phase"])
         phase_after = phase_before + 1
         session.write_vars({"phase": phase_after})

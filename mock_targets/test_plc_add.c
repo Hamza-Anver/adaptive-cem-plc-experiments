@@ -20,6 +20,11 @@ static const PlcVarMeta METADATA_DICT[] = {
     {"status", PLC_TYPE_BOOL, sizeof(bool), offsetof(TestPlcAddState, status)},
 };
 
+static const PlcVarMeta INPUT_HINTS[] = {
+    {"a", PLC_TYPE_UINT8, sizeof(uint8_t), 0},
+    {"b", PLC_TYPE_UINT8, sizeof(uint8_t), 1},
+};
+
 void plc_init(void) {
     memset(&state, 0, sizeof(state));
 }
@@ -73,5 +78,17 @@ bool plc_get_var_meta(size_t index, PlcVarMeta* out) {
         return false;
     }
     memcpy(out, &METADATA_DICT[index], sizeof(PlcVarMeta));
+    return true;
+}
+
+size_t plc_get_input_hint_count(void) {
+    return sizeof(INPUT_HINTS) / sizeof(INPUT_HINTS[0]);
+}
+
+bool plc_get_input_hint_meta(size_t index, PlcVarMeta* out) {
+    if (index >= plc_get_input_hint_count() || !out) {
+        return false;
+    }
+    memcpy(out, &INPUT_HINTS[index], sizeof(PlcVarMeta));
     return true;
 }

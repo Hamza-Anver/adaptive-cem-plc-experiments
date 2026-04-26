@@ -33,6 +33,10 @@ static const PlcVarMeta METADATA_DICT[] = {
     {"status",         PLC_TYPE_UINT8,  sizeof(int8_t),   offsetof(PumpState, status)}
 };
 
+static const PlcVarMeta INPUT_HINTS[] = {
+    {"control_byte", PLC_TYPE_UINT8, sizeof(uint8_t), 0},
+};
+
 static void reset_runtime_state(void) {
     state.pressure_score = 0;
     state.armed_cycles = 0;
@@ -147,5 +151,15 @@ size_t plc_get_var_count(void) {
 bool plc_get_var_meta(size_t index, PlcVarMeta* out_meta) {
     if (index >= plc_get_var_count() || !out_meta) return false;
     memcpy(out_meta, &METADATA_DICT[index], sizeof(PlcVarMeta));
+    return true;
+}
+
+size_t plc_get_input_hint_count(void) {
+    return sizeof(INPUT_HINTS) / sizeof(INPUT_HINTS[0]);
+}
+
+bool plc_get_input_hint_meta(size_t index, PlcVarMeta* out_meta) {
+    if (index >= plc_get_input_hint_count() || !out_meta) return false;
+    memcpy(out_meta, &INPUT_HINTS[index], sizeof(PlcVarMeta));
     return true;
 }

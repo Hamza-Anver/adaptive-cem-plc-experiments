@@ -40,6 +40,16 @@ static const PlcVarMeta METADATA_DICT[] = {
     {"status",        PLC_TYPE_UINT8,  sizeof(int8_t),  offsetof(PipelineState, status)}
 };
 
+static const PlcVarMeta INPUT_HINTS[] = {
+    {"pump_rate", PLC_TYPE_UINT8, sizeof(uint8_t), 0},
+    {"valve_pos", PLC_TYPE_UINT8, sizeof(uint8_t), 1},
+    {"pipe_temp", PLC_TYPE_UINT8, sizeof(uint8_t), 2},
+    {"back_pressure", PLC_TYPE_UINT8, sizeof(uint8_t), 3},
+    {"feed_conc", PLC_TYPE_UINT8, sizeof(uint8_t), 4},
+    {"coolant_rate", PLC_TYPE_UINT8, sizeof(uint8_t), 5},
+    {"cmd", PLC_TYPE_UINT8, sizeof(uint8_t), 6},
+};
+
 void plc_init(void) {
     memset(&state, 0, sizeof(PipelineState));
     state.phase = PHASE_IDLE;
@@ -178,5 +188,15 @@ size_t plc_get_var_count(void) {
 bool plc_get_var_meta(size_t index, PlcVarMeta* out) {
     if (index >= plc_get_var_count()) return false;
     memcpy(out, &METADATA_DICT[index], sizeof(PlcVarMeta));
+    return true;
+}
+
+size_t plc_get_input_hint_count(void) {
+    return sizeof(INPUT_HINTS) / sizeof(INPUT_HINTS[0]);
+}
+
+bool plc_get_input_hint_meta(size_t index, PlcVarMeta* out) {
+    if (index >= plc_get_input_hint_count() || !out) return false;
+    memcpy(out, &INPUT_HINTS[index], sizeof(PlcVarMeta));
     return true;
 }

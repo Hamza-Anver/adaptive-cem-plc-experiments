@@ -136,6 +136,13 @@ impl TargetSession {
             .collect()
     }
 
+    fn input_hints(&self) -> Vec<PlcVarMeta> {
+        crate::common::all_input_hints()
+            .into_iter()
+            .map(|m| m.into())
+            .collect()
+    }
+
     #[pyo3(signature = (names=None))]
     fn read_vars(&self, py: Python<'_>, names: Option<Vec<String>>) -> PyResult<Py<PyAny>> {
         let pairs = crate::common::var_values(names.as_deref())
