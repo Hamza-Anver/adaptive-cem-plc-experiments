@@ -15,26 +15,26 @@ def main():
         # Create and boot target session
         print("\n[1] Creating PyTargetSession...")
         session = PyTargetSession()
-        print(f"    ✓ Session created: {session}")
+        print(f"    Session created: {session}")
         
         print("\n[2] Booting target...")
         session.boot()
-        print("    ✓ Target booted successfully")
+        print("    Target booted successfully")
         
         # Test input size
         print("\n[3] Reading input size...")
         input_sz = session.input_size()
-        print(f"    ✓ Input size: {input_sz} bytes")
+        print(f"    Input size: {input_sz} bytes")
         
         # Test full state size
         print("\n[4] Reading full state size...")
         state_sz = session.full_state_size()
-        print(f"    ✓ State size: {state_sz} bytes")
+        print(f"    State size: {state_sz} bytes")
         
         # Test reading variable metadata (this is the main test)
         print("\n[5] Reading C program variable metadata...")
         var_metadata = session.get_all_var_metadata()
-        print(f"    ✓ Found {len(var_metadata)} variables:")
+        print(f"    Found {len(var_metadata)} variables:")
         
         if var_metadata:
             print("\n    Variables:")
