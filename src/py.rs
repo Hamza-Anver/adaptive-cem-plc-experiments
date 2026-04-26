@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyException;
-use crate::common::{PlcVarMeta, PlcVarType};
+use pyo3::types::{PyBool, PyDict};
+use crate::common::{PlcVarMeta, PlcVarType, PlcValue};
 
 /// Python module for LibAFL Sandbox
 #[pymodule]
@@ -132,6 +133,83 @@ impl PyTargetSession {
             .into_iter()
             .map(|m| m.into())
             .collect()
+    }
+
+    fn get_vars(&self, py: Python<'_>, names: Option<Vec<String>>) -> PyResult<PyObject> {
+        let pairs = crate::common::get_var_values(names.as_deref())
+            .map_err(PyException::new_err)?;
+
+        let out = PyDict::new(py);
+        for (name, value) in pairs {
+            match value {
+                PlcValue::UINT8(v) => out.set_item(name, v)?,
+                PlcValue::UINT16(v) => out.set_item(name, v)?,
+                PlcValue::UINT32(v) => out.set_item(name, v)?,
+                PlcValue::BOOL(v) => out.set_item(name, v)?,
+                PlcValue::FLOAT(v) => out.set_item(name, v)?,
+            }
+        }
+        Ok(out.into())
+    }
+
+    fn set_vars(&self, values: &PyDict) -> PyResult<()> {
+        let var_types = crate::common::get_var_types();
+        let mut updates: Vec<(String, PlcValue)> = Vec::with_capacity(values.len());
+
+        for (k, v) in values {
+            let name: String = k.extract()?;
+            let var_type = var_types
+                .get(&name)
+                .ok_or_else(|| PyException::new_err(format!("Unknown variable '{}'", name)))?;
+
+            let parsed = match var_type {
+                PlcVarType::UINT8 => {
+                    if v.is_instance_of::<PyBool>() {
+                        return Err(PyException::new_err(format!(
+                            "Type mismatch for '{}': expected UINT8",
+                            name
+                        )));
+                    }
+                    let raw: u64 = v.extract()?;
+                    let conv = u8::try_from(raw).map_err(|_| {
+                        PyException::new_err(format!("Out of range for UINT8 variable '{}'", name))
+                    })?;
+                    PlcValue::UINT8(conv)
+                }
+                PlcVarType::UINT16 => {
+                    if v.is_instance_of::<PyBool>() {
+                        return Err(PyException::new_err(format!(
+                            "Type mismatch for '{}': expected UINT16",
+                            name
+                        )));
+                    }
+                    let raw: u64 = v.extract()?;
+                    let conv = u16::try_from(raw).map_err(|_| {
+                        PyException::new_err(format!("Out of range for UINT16 variable '{}'", name))
+                    })?;
+                    PlcValue::UINT16(conv)
+                }
+                PlcVarType::UINT32 => {
+                    if v.is_instance_of::<PyBool>() {
+                        return Err(PyException::new_err(format!(
+                            "Type mismatch for '{}': expected UINT32",
+                            name
+                        )));
+                    }
+                    let raw: u64 = v.extract()?;
+                    let conv = u32::try_from(raw).map_err(|_| {
+                        PyException::new_err(format!("Out of range for UINT32 variable '{}'", name))
+                    })?;
+                    PlcValue::UINT32(conv)
+                }
+                PlcVarType::BOOL => PlcValue::BOOL(v.extract::<bool>()?),
+                PlcVarType::FLOAT => PlcValue::FLOAT(v.extract::<f64>()? as f32),
+            };
+
+            updates.push((name, parsed));
+        }
+
+        crate::common::set_var_values(&updates).map_err(PyException::new_err)
     }
 
     fn __repr__(&self) -> String {

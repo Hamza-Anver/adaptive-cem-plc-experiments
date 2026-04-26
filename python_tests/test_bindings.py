@@ -42,14 +42,27 @@ def main():
                 print(f"      - {var}")
         else:
             print("      (No variables returned)")
+
+        print("\n[6] Reading variables as a dict...")
+        vars_before = session.get_vars()
+        print(f"    Read {len(vars_before)} variables via dict API")
+
+        print("\n[7] Setting one variable from dict...")
+        phase_before = int(vars_before["phase"])
+        phase_after = phase_before + 1
+        session.set_vars({"phase": phase_after})
+        vars_after = session.get_vars(["phase"])
+        if int(vars_after["phase"]) != phase_after:
+            raise RuntimeError("phase was not updated correctly")
+        print(f"    phase changed from {phase_before} to {phase_after}")
         
         print("\n" + "=" * 60)
-        print("✓ All tests passed! Python bindings working correctly.")
+        print("All tests passed! Python bindings working correctly.")
         print("=" * 60)
         return 0
         
     except Exception as e:
-        print(f"\n✗ Error: {e}", file=sys.stderr)
+        print(f"\n Error: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         return 1

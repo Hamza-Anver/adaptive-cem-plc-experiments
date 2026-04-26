@@ -1,0 +1,110 @@
+from typing import TypeAlias
+
+VarValue: TypeAlias = int | bool | float
+"""Supported Python value types for PLC variables."""
+
+class PyPlcVarType:
+    """Enum-like variable type constants from the target metadata."""
+
+    UINT8: int
+    UINT16: int
+    UINT32: int
+    BOOL: int
+    FLOAT: int
+
+class PyPlcVarMeta:
+    """Metadata entry describing one PLC variable in full state."""
+
+    name: str
+    """Variable name exposed by the target."""
+
+    var_type: PyPlcVarType
+    """Variable type constant."""
+
+    size: int
+    """Variable size in bytes."""
+
+    offset: int
+    """Byte offset of the variable inside full_state()."""
+
+    def __init__(self, name: str, var_type: PyPlcVarType, size: int, offset: int) -> None:
+        """Create a metadata object.
+
+        Args:
+            name: Variable name.
+            var_type: Variable type enum value.
+            size: Size in bytes.
+            offset: Byte offset in full state.
+        """
+
+class PyTargetSession:
+    """Session handle for controlling and introspecting the PLC target."""
+
+    def __init__(self) -> None:
+        """Create a new session. Call boot() before reset()."""
+
+    def boot(self) -> None:
+        """Initialize the target runtime once."""
+
+    def reset(self) -> None:
+        """Reset target state to its initial values."""
+
+    def input_size(self) -> int:
+        """Return required input bytes per step."""
+
+    def step(self, data: bytes) -> None:
+        """Run one target step.
+
+        Args:
+            data: Input bytes for a single step.
+        """
+
+    def step_time_series(self, data: bytes, bytes_per_tick: int) -> None:
+        """Run multiple steps from a concatenated time-series buffer.
+
+        Args:
+            data: Concatenated input bytes.
+            bytes_per_tick: Number of bytes consumed per step.
+        """
+
+    def full_state_size(self) -> int:
+        """Return total state size in bytes."""
+
+    def full_state(self) -> bytes:
+        """Return full raw state bytes."""
+
+    def set_full_state(self, state: bytes) -> bool:
+        """Set full raw state bytes.
+
+        Args:
+            state: Raw state buffer matching full_state_size().
+
+        Returns:
+            True on success, otherwise False.
+        """
+
+    def get_all_var_metadata(self) -> list[PyPlcVarMeta]:
+        """Return metadata for all exposed variables."""
+
+    def get_vars(self, names: list[str] | None = None) -> dict[str, VarValue]:
+        """Return variables as a dict.
+
+        Args:
+            names: Variable names to fetch. If None, returns all variables.
+
+        Returns:
+            Mapping of variable name to typed value (int, bool, or float).
+        """
+
+    def set_vars(self, values: dict[str, VarValue]) -> None:
+        """Set variables from a dict.
+
+        Args:
+            values: Mapping of variable name to new value.
+
+        Raises:
+            Exception: If a variable name is unknown or a value type/range is invalid.
+        """
+
+def py_input_size() -> int:
+    """Return required input bytes per step."""
