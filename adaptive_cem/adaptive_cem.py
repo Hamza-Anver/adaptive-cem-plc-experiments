@@ -12,7 +12,7 @@ import random
 import statistics
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -67,6 +67,39 @@ class RustPipelinePLC:
         terminated = int(state.get("fill_head", 0)) >= 64
         return state, terminated
 
+    def decode_raw_state(self, raw_state: bytes) -> Dict[str, Any]:
+        state_arr = np.frombuffer(raw_state, dtype=np.uint8)[np.newaxis, :]
+        result = self.session.decode_states_batch(np.ascontiguousarray(state_arr))
+        result[0]["_raw_state"] = raw_state
+        return result[0]
+
+    def decode_raw_states_batch(self, raw_states: np.ndarray) -> List[Dict[str, Any]]:
+        """Decode a (N, state_size) uint8 array into N dicts without touching global PLC state."""
+        flat = np.ascontiguousarray(raw_states.reshape(-1, raw_states.shape[-1]))
+        decoded = self.session.decode_states_batch(flat)
+        for i, row in enumerate(raw_states.reshape(-1, raw_states.shape[-1])):
+            decoded[i]["_raw_state"] = row.tobytes()
+        return decoded
+
+    def rollout_states_batch(self, initial_state: bytes, actions: np.ndarray) -> np.ndarray:
+        if actions.ndim != 3:
+            raise ValueError(
+                f"actions must be a 3D array shaped (rollouts, steps, input_size), got ndim={actions.ndim}"
+            )
+
+        clipped = np.clip(actions, np.array(ACTION_LOW, dtype=np.int16), np.array(ACTION_HIGH, dtype=np.int16))
+        action_u8 = np.ascontiguousarray(clipped.astype(np.uint8, copy=False))
+
+        state_vec = np.frombuffer(initial_state, dtype=np.uint8)
+        if state_vec.size != self.session.state_size():
+            raise ValueError(
+                f"initial_state size mismatch: got {state_vec.size}, expected {self.session.state_size()}"
+            )
+
+        initial_states = np.repeat(state_vec[np.newaxis, :], action_u8.shape[0], axis=0)
+        initial_states = np.ascontiguousarray(initial_states, dtype=np.uint8)
+        return self.session.rollout_states_batch(initial_states, action_u8)
+
 
 class ProgressVariableDiscoverer:
     def __init__(self, target_var: str, max_vars: int = 5):
@@ -104,19 +137,36 @@ class ProgressVariableDiscoverer:
         return valid_cols
 
     def analyze(self, current_vars: List[str], force_random: bool = False) -> List[str]:
-        if len(self.data_buffer) < 200:
+        if len(self.data_buffer) < 200 and not force_random:
             return current_vars
 
         df = pd.DataFrame(self.data_buffer).fillna(0)
         valid_cols = self.get_valid_variables(df)
 
         if not valid_cols:
+            if force_random:
+                print("  -> [STAGNATION DETECTED] No valid variables survived heuristics; keeping current set.")
             return current_vars
 
         if force_random:
             print("  -> [STAGNATION DETECTED] Bypassing ML. Injecting random variables to explore new state spaces.")
             k = min(self.max_vars, len(valid_cols))
-            return random.sample(valid_cols, k)
+            current_set = set(current_vars)
+            preferred = [col for col in valid_cols if col not in current_set]
+
+            if not preferred:
+                print("  -> [STAGNATION DETECTED] No alternative variables available; keeping current set.")
+                return current_vars
+
+            if len(preferred) >= k:
+                return random.sample(preferred, k)
+
+            chosen = preferred[:]
+            needed = k - len(chosen)
+            fallback_pool = [col for col in valid_cols if col not in chosen]
+            if needed > 0 and fallback_pool:
+                chosen.extend(random.sample(fallback_pool, min(needed, len(fallback_pool))))
+            return chosen
 
         y = np.array(self.target_buffer)
         if np.std(y) < 1e-5:
@@ -285,14 +335,17 @@ class MLGoExploreCEM:
                 force_random = self.stagnation_counter >= self.config.stagnation_limit
                 new_vars = self.discoverer.analyze(old_vars, force_random=force_random)
 
-                if force_random:
-                    self.stagnation_counter = 0
-
-                if set(new_vars) != set(old_vars):
+                vars_changed = set(new_vars) != set(old_vars)
+                if vars_changed:
                     print(f"\n[Variable Update] Tracking new parameters: {new_vars}")
                     self.objective.update_vars(new_vars)
                     self.archive.reindex()
                     print(f"Archive re-indexed. Unique states mapped: {len(self.archive.entries_by_cell)}\n")
+                    if force_random:
+                        self.stagnation_counter = 0
+                elif force_random:
+                    # Keep retrying forced-random at each discovery tick until variables actually change.
+                    print("  -> [STAGNATION DETECTED] Variable set unchanged; retrying forced selection next discovery interval.")
 
             if iteration % 5 == 0:
                 print(
@@ -314,24 +367,40 @@ class MLGoExploreCEM:
 
         best_rollouts = []
         for _ in range(self.config.cem_generations):
-            rollouts = []
-            for _ in range(self.config.population):
-                seq = []
+            seq_np = np.zeros((self.config.population, self.config.horizon, len(ACTION_LOW)), dtype=np.uint8)
+            seq_list: List[List[List[int]]] = []
+            for rollout_idx in range(self.config.population):
+                seq: List[List[int]] = []
                 for t in range(self.config.horizon):
                     analog = [int(self.rng.gauss(mean[t][i], std[t][i])) for i in range(ANALOG_DIMS)]
                     cmd = 1 if self.rng.random() < 0.5 else 0
-                    seq.append([max(l, min(h, v)) for v, l, h in zip(analog + [cmd], ACTION_LOW, ACTION_HIGH)])
+                    step_vals = [max(l, min(h, v)) for v, l, h in zip(analog + [cmd], ACTION_LOW, ACTION_HIGH)]
+                    seq.append(step_vals)
+                    seq_np[rollout_idx, t, :] = np.array(step_vals, dtype=np.uint8)
+                seq_list.append(seq)
 
+            raw_parent = parent.state.get("_raw_state")
+            if not isinstance(raw_parent, (bytes, bytearray)):
                 self.plc.set_state(parent.state)
-                states, best_score, terminated = [], -math.inf, False
-                for action in seq:
-                    state, terminated = self.plc.scan(action)
-                    states.append(copy.deepcopy(state))
+                raw_parent = self.plc.session.state()
+
+            raw_states = self.plc.rollout_states_batch(bytes(raw_parent), seq_np)
+
+            # Decode all (population × horizon) states in one Rust call — no per-cell FFI round-trips.
+            decoded_flat = self.plc.decode_raw_states_batch(raw_states)
+
+            rollouts = []
+            for rollout_idx in range(self.config.population):
+                states: List[Dict[str, Any]] = []
+                best_score = -math.inf
+                for step_idx in range(self.config.horizon):
+                    state = decoded_flat[rollout_idx * self.config.horizon + step_idx]
+                    states.append(state)
                     best_score = max(best_score, self.objective.state_score(state))
-                    if terminated:
+                    if int(state.get("fill_head", 0)) >= 64:
                         break
 
-                rollouts.append((states[-1], states, seq, best_score))
+                rollouts.append((states[-1], states, seq_list[rollout_idx], best_score))
 
             rollouts.sort(key=lambda x: x[3], reverse=True)
             elites = rollouts[: int(self.config.population * self.config.elite_fraction)]

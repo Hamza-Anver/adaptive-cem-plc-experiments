@@ -1,4 +1,5 @@
 pub mod common;
+pub mod cem_rollout;
 
 #[cfg(feature = "python")]
 mod py;

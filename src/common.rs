@@ -276,6 +276,10 @@ fn metadata_map() -> HashMap<String, PlcVarMeta> {
 
 pub fn var_values(names: Option<&[String]>) -> Result<Vec<(String, PlcValue)>, String> {
     let state = state();
+    var_values_from_bytes(&state, names)
+}
+
+pub fn var_values_from_bytes(state: &[u8], names: Option<&[String]>) -> Result<Vec<(String, PlcValue)>, String> {
     let meta_map = metadata_map();
 
     let target_names: Vec<String> = match names {
@@ -288,7 +292,7 @@ pub fn var_values(names: Option<&[String]>) -> Result<Vec<(String, PlcValue)>, S
         let meta = meta_map
             .get(&name)
             .ok_or_else(|| format!("Unknown variable '{}'", name))?;
-        let value = decode_value_from_state(&state, meta)?;
+        let value = decode_value_from_state(state, meta)?;
         out.push((name, value));
     }
     Ok(out)

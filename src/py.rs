@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyException;
 use pyo3::types::{PyBool, PyDict};
+use numpy::{IntoPyArray, PyArray3, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use crate::common::{PlcValue, PlcVarMeta as CorePlcVarMeta, PlcVarType as CorePlcVarType};
 
 /// Python module for LibAFL Sandbox
@@ -117,6 +118,66 @@ impl TargetSession {
         crate::common::step_series(&data, bytes_per_step);
     }
 
+    fn rollout_states_batch<'py>(
+        &self,
+        py: Python<'py>,
+        initial_states: PyReadonlyArray2<'py, u8>,
+        inputs: PyReadonlyArray3<'py, u8>,
+    ) -> PyResult<Bound<'py, PyArray3<u8>>> {
+        let init_shape = initial_states.shape();
+        let input_shape = inputs.shape();
+
+        let num_rollouts = init_shape[0];
+        let state_size = init_shape[1];
+
+        if input_shape[0] != num_rollouts {
+            return Err(PyException::new_err(format!(
+                "Shape mismatch: initial_states has {} rollouts, inputs has {}",
+                num_rollouts,
+                input_shape[0]
+            )));
+        }
+
+        let num_steps = input_shape[1];
+        let bytes_per_step = input_shape[2];
+
+        let expected_state_size = crate::common::state_size();
+        if state_size != expected_state_size {
+            return Err(PyException::new_err(format!(
+                "Invalid state width: got {}, expected {}",
+                state_size,
+                expected_state_size
+            )));
+        }
+
+        let expected_input_size = crate::common::input_size();
+        if bytes_per_step != expected_input_size {
+            return Err(PyException::new_err(format!(
+                "Invalid input width: got {}, expected {}",
+                bytes_per_step,
+                expected_input_size
+            )));
+        }
+
+        let initial_flat: Vec<u8> = initial_states.as_array().iter().copied().collect();
+        let input_flat: Vec<u8> = inputs.as_array().iter().copied().collect();
+
+        let out_flat = crate::cem_rollout::rollout_states_batch(
+            &initial_flat,
+            num_rollouts,
+            state_size,
+            &input_flat,
+            num_steps,
+            bytes_per_step,
+        )
+        .map_err(PyException::new_err)?;
+
+        let out = numpy::ndarray::Array3::from_shape_vec((num_rollouts, num_steps, state_size), out_flat)
+            .map_err(|e| PyException::new_err(format!("Failed to build output array: {}", e)))?;
+
+        Ok(out.into_pyarray(py))
+    }
+
     fn state_size(&self) -> usize {
         crate::common::state_size()
     }
@@ -219,6 +280,46 @@ impl TargetSession {
         }
 
         crate::common::write_var_values(&updates).map_err(PyException::new_err)
+    }
+
+    /// Decode a batch of raw state byte-rows into Python dicts without touching global PLC state.
+    /// `states` must be a 2-D array shaped (N, state_size).
+    /// Returns a list of N dicts, one per row.
+    fn decode_states_batch<'py>(
+        &self,
+        py: Python<'py>,
+        states: PyReadonlyArray2<'py, u8>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let arr = states.as_array();
+        let (n_rows, state_size) = (arr.nrows(), arr.ncols());
+
+        let expected_state_size = crate::common::state_size();
+        if state_size != expected_state_size {
+            return Err(PyException::new_err(format!(
+                "Invalid state width: got {}, expected {}",
+                state_size, expected_state_size
+            )));
+        }
+
+        let mut result = Vec::with_capacity(n_rows);
+        for row in arr.rows() {
+            let row_bytes: Vec<u8> = row.iter().copied().collect();
+            let pairs = crate::common::var_values_from_bytes(&row_bytes, None)
+                .map_err(PyException::new_err)?;
+
+            let dict = PyDict::new(py);
+            for (name, value) in pairs {
+                match value {
+                    PlcValue::UINT8(v)  => dict.set_item(name, v)?,
+                    PlcValue::UINT16(v) => dict.set_item(name, v)?,
+                    PlcValue::UINT32(v) => dict.set_item(name, v)?,
+                    PlcValue::BOOL(v)   => dict.set_item(name, v)?,
+                    PlcValue::FLOAT(v)  => dict.set_item(name, v)?,
+                }
+            }
+            result.push(dict.unbind().into_any());
+        }
+        Ok(result)
     }
 
     fn __repr__(&self) -> String {

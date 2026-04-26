@@ -33,11 +33,16 @@ static PipelineState state;
 
 static const PlcVarMeta METADATA_DICT[] = {
     {"phase",         PLC_TYPE_UINT32, sizeof(Phase),   offsetof(PipelineState, phase)},
-    {"fill_head",     PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, fill_head)},
+    {"cycle_count",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, cycle_count)},
+    {"prime_cycles",  PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, prime_cycles)},
     {"prime_score",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, prime_score)},
     {"flux_score",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flux_score)},
     {"flow_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, flow_accum)},
-    {"status",        PLC_TYPE_UINT8,  sizeof(int8_t),  offsetof(PipelineState, status)}
+    {"press_accum",   PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, press_accum)},
+    {"temp_accum",    PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, temp_accum)},
+    {"phase_counter", PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, phase_counter)},
+    {"fill_head",     PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, fill_head)},
+    {"pv_sum",        PLC_TYPE_UINT32, sizeof(int32_t), offsetof(PipelineState, pv_sum)}
 };
 
 static const PlcVarMeta INPUT_HINTS[] = {

@@ -1,5 +1,8 @@
 from typing import TypeAlias
 
+import numpy as np
+import numpy.typing as npt
+
 VarValue: TypeAlias = int | bool | float
 """Supported Python value types for PLC variables."""
 
@@ -107,6 +110,24 @@ class TargetSession:
 
         Raises:
             Exception: If a variable name is unknown or a value type/range is invalid.
+        """
+
+    def rollout_states_batch(
+        self,
+        initial_states: npt.NDArray[np.uint8],
+        inputs: npt.NDArray[np.uint8],
+    ) -> npt.NDArray[np.uint8]:
+        """Run batched rollouts and return raw state bytes at each step.
+
+        Args:
+            initial_states: Array shaped ``(rollouts, state_size)``.
+            inputs: Array shaped ``(rollouts, steps, input_size)``.
+
+        Returns:
+            Array shaped ``(rollouts, steps, state_size)`` containing raw state snapshots.
+
+        Raises:
+            Exception: If shapes do not match session ``state_size``/``input_size``.
         """
 
 def input_size() -> int:
