@@ -1,22 +1,23 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyException;
 use pyo3::types::{PyBool, PyDict};
-use crate::common::{PlcVarMeta, PlcVarType, PlcValue};
+use crate::common::{PlcValue, PlcVarMeta as CorePlcVarMeta, PlcVarType as CorePlcVarType};
 
 /// Python module for LibAFL Sandbox
 #[pymodule]
-pub fn libafl_sandbox(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<PyPlcVarType>()?;
-    m.add_class::<PyPlcVarMeta>()?;
-    m.add_class::<PyTargetSession>()?;
-    m.add_function(wrap_pyfunction!(py_input_size, m)?)?;
+pub fn libafl_sandbox(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PlcVarType>()?;
+    m.add_class::<PlcVarMeta>()?;
+    m.add_class::<TargetSession>()?;
+    m.add_function(wrap_pyfunction!(input_size, m)?)?;
+
     Ok(())
 }
 
 /// Python-facing enum for variable types
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PyPlcVarType {
+pub enum PlcVarType {
     UINT8 = 0,
     UINT16 = 1,
     UINT32 = 2,
@@ -24,31 +25,31 @@ pub enum PyPlcVarType {
     FLOAT = 4,
 }
 
-impl From<PlcVarType> for PyPlcVarType {
-    fn from(t: PlcVarType) -> Self {
+impl From<CorePlcVarType> for PlcVarType {
+    fn from(t: CorePlcVarType) -> Self {
         match t {
-            PlcVarType::UINT8 => PyPlcVarType::UINT8,
-            PlcVarType::UINT16 => PyPlcVarType::UINT16,
-            PlcVarType::UINT32 => PyPlcVarType::UINT32,
-            PlcVarType::BOOL => PyPlcVarType::BOOL,
-            PlcVarType::FLOAT => PyPlcVarType::FLOAT,
+            CorePlcVarType::UINT8 => PlcVarType::UINT8,
+            CorePlcVarType::UINT16 => PlcVarType::UINT16,
+            CorePlcVarType::UINT32 => PlcVarType::UINT32,
+            CorePlcVarType::BOOL => PlcVarType::BOOL,
+            CorePlcVarType::FLOAT => PlcVarType::FLOAT,
         }
     }
 }
 
 #[pyclass]
-pub struct PyPlcVarMeta {
+pub struct PlcVarMeta {
     pub name: String,
-    pub var_type: PyPlcVarType,
+    pub var_type: PlcVarType,
     pub size: usize,
     pub offset: usize,
 }
 
 #[pymethods]
-impl PyPlcVarMeta {
+impl PlcVarMeta {
     #[new]
-    fn new(name: String, var_type: PyPlcVarType, size: usize, offset: usize) -> Self {
-        PyPlcVarMeta {
+    fn new(name: String, var_type: PlcVarType, size: usize, offset: usize) -> Self {
+        PlcVarMeta {
             name,
             var_type,
             size,
@@ -64,12 +65,12 @@ impl PyPlcVarMeta {
     }
 }
 
-impl From<PlcVarMeta> for PyPlcVarMeta {
-    fn from(meta: PlcVarMeta) -> Self {
+impl From<CorePlcVarMeta> for PlcVarMeta {
+    fn from(meta: CorePlcVarMeta) -> Self {
         let name = String::from_utf8_lossy(&meta.name)
             .trim_matches(char::from(0))
             .to_string();
-        PyPlcVarMeta {
+        PlcVarMeta {
             name,
             var_type: meta.var_type.into(),
             size: meta.size,
@@ -80,15 +81,15 @@ impl From<PlcVarMeta> for PyPlcVarMeta {
 
 /// Target session object for Python
 #[pyclass]
-pub struct PyTargetSession {
+pub struct TargetSession {
     booted: bool,
 }
 
 #[pymethods]
-impl PyTargetSession {
+impl TargetSession {
     #[new]
     fn new() -> Self {
-        PyTargetSession { booted: false }
+        TargetSession { booted: false }
     }
 
     fn boot(&mut self) {
@@ -112,31 +113,32 @@ impl PyTargetSession {
         crate::common::step(&data);
     }
 
-    fn step_time_series(&self, data: Vec<u8>, bytes_per_tick: usize) {
-        crate::common::step_time_series(&data, bytes_per_tick);
+    fn step_series(&self, data: Vec<u8>, bytes_per_step: usize) {
+        crate::common::step_series(&data, bytes_per_step);
     }
 
-    fn full_state_size(&self) -> usize {
-        crate::common::full_state_size()
+    fn state_size(&self) -> usize {
+        crate::common::state_size()
     }
 
-    fn full_state(&self) -> Vec<u8> {
-        crate::common::full_state()
+    fn state(&self) -> Vec<u8> {
+        crate::common::state()
     }
 
-    fn set_full_state(&self, state: Vec<u8>) -> bool {
-        crate::common::set_full_state(&state)
+    fn set_state(&self, state: Vec<u8>) -> bool {
+        crate::common::set_state(&state)
     }
 
-    fn get_all_var_metadata(&self) -> Vec<PyPlcVarMeta> {
-        crate::common::get_all_var_metadata()
+    fn var_metadata(&self) -> Vec<PlcVarMeta> {
+        crate::common::all_var_metadata()
             .into_iter()
             .map(|m| m.into())
             .collect()
     }
 
-    fn get_vars(&self, py: Python<'_>, names: Option<Vec<String>>) -> PyResult<PyObject> {
-        let pairs = crate::common::get_var_values(names.as_deref())
+    #[pyo3(signature = (names=None))]
+    fn read_vars(&self, py: Python<'_>, names: Option<Vec<String>>) -> PyResult<Py<PyAny>> {
+        let pairs = crate::common::var_values(names.as_deref())
             .map_err(PyException::new_err)?;
 
         let out = PyDict::new(py);
@@ -149,11 +151,11 @@ impl PyTargetSession {
                 PlcValue::FLOAT(v) => out.set_item(name, v)?,
             }
         }
-        Ok(out.into())
+        Ok(out.unbind().into_any())
     }
 
-    fn set_vars(&self, values: &PyDict) -> PyResult<()> {
-        let var_types = crate::common::get_var_types();
+    fn write_vars(&self, values: &Bound<'_, PyDict>) -> PyResult<()> {
+        let var_types = crate::common::var_types();
         let mut updates: Vec<(String, PlcValue)> = Vec::with_capacity(values.len());
 
         for (k, v) in values {
@@ -163,7 +165,7 @@ impl PyTargetSession {
                 .ok_or_else(|| PyException::new_err(format!("Unknown variable '{}'", name)))?;
 
             let parsed = match var_type {
-                PlcVarType::UINT8 => {
+                CorePlcVarType::UINT8 => {
                     if v.is_instance_of::<PyBool>() {
                         return Err(PyException::new_err(format!(
                             "Type mismatch for '{}': expected UINT8",
@@ -176,7 +178,7 @@ impl PyTargetSession {
                     })?;
                     PlcValue::UINT8(conv)
                 }
-                PlcVarType::UINT16 => {
+                CorePlcVarType::UINT16 => {
                     if v.is_instance_of::<PyBool>() {
                         return Err(PyException::new_err(format!(
                             "Type mismatch for '{}': expected UINT16",
@@ -189,7 +191,7 @@ impl PyTargetSession {
                     })?;
                     PlcValue::UINT16(conv)
                 }
-                PlcVarType::UINT32 => {
+                CorePlcVarType::UINT32 => {
                     if v.is_instance_of::<PyBool>() {
                         return Err(PyException::new_err(format!(
                             "Type mismatch for '{}': expected UINT32",
@@ -202,23 +204,23 @@ impl PyTargetSession {
                     })?;
                     PlcValue::UINT32(conv)
                 }
-                PlcVarType::BOOL => PlcValue::BOOL(v.extract::<bool>()?),
-                PlcVarType::FLOAT => PlcValue::FLOAT(v.extract::<f64>()? as f32),
+                CorePlcVarType::BOOL => PlcValue::BOOL(v.extract::<bool>()?),
+                CorePlcVarType::FLOAT => PlcValue::FLOAT(v.extract::<f64>()? as f32),
             };
 
             updates.push((name, parsed));
         }
 
-        crate::common::set_var_values(&updates).map_err(PyException::new_err)
+        crate::common::write_var_values(&updates).map_err(PyException::new_err)
     }
 
     fn __repr__(&self) -> String {
-        format!("PyTargetSession(booted={})", self.booted)
+        format!("TargetSession(booted={})", self.booted)
     }
 }
 
 /// Get the input size (free function for direct access)
 #[pyfunction]
-fn py_input_size() -> usize {
+fn input_size() -> usize {
     crate::common::input_size()
 }

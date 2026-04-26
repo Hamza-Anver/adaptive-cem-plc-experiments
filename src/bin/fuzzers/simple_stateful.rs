@@ -17,7 +17,7 @@ use libafl::{
 use libafl_bolts::{AsSlice, rands::StdRand, tuples::tuple_list};
 use libafl_targets::std_edges_map_observer;
 
-use libafl_sandbox::common::{boot_plc, reset_plc, step_time_series, input_size};
+use libafl_sandbox::common::{boot_plc, input_size, reset_plc, step_series};
 
 const SEQUENCE_LENGTH: usize = 1024;
 
@@ -57,7 +57,7 @@ pub fn run() {
         let target = input.target_bytes();
         let buf = target.as_slice();
         reset_plc();
-        step_time_series(buf, input_size);
+        step_series(buf, input_size);
         libafl::executors::ExitKind::Ok
     };
 

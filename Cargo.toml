@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "libafl_sandbox"
-crate-type = ["cdylib"]
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "libafl_sandbox"
@@ -15,7 +15,7 @@ path = "src/bin/main.rs"
 libafl = "0.15.4"
 libafl_bolts = "0.15.4"
 libafl_targets = { version = "0.15.4", features = ["sancov_pcguard_edges"] }
-pyo3 = { version = "0.20", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28.3", features = ["extension-module"], optional = true }
 
 [build-dependencies]
 cc = "1.2.60"

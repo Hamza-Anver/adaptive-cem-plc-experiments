@@ -1,5 +1,4 @@
 use std::env;
-use libafl_sandbox::common::{input_size};
 
 // This macro automatically generates the `mod` declarations, the 
 // CLI match statement, and the dynamic help menu.
@@ -29,9 +28,7 @@ macro_rules! fuzzer_registry {
 
 fuzzer_registry!(
     simple_stateless, 
-    simple_stateful,
-    pipeline_smoke,
-    pipeline_greybox
+    simple_stateful
 );
 
 fn main() {
@@ -55,12 +52,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use libafl_sandbox::common::{full_state, full_state_size, get_all_var_metadata, set_full_state};
+    use libafl_sandbox::common::{all_var_metadata, input_size, set_state, state, state_size};
 
     #[test]
-    fn test_get_all_var_metadata() {
-        let metadata = get_all_var_metadata();
+    fn test_all_var_metadata() {
+        let metadata = all_var_metadata();
         let count = metadata.len();
         println!("Retrieved {} variables from metadata", count);
         for var in metadata.iter() {
@@ -75,24 +71,24 @@ mod tests {
         let size = input_size();
         assert!(size > 0, "Expected a positive input size");
 
-        let state_size = full_state_size();
-        let state = full_state();
+        let total_state_size = state_size();
+        let current_state = state();
 
-        if state_size == 0 {
-            assert!(state.is_empty(), "Expected empty state when the target does not expose introspection");
+        if total_state_size == 0 {
+            assert!(current_state.is_empty(), "Expected empty state when the target does not expose introspection");
             return;
         }
 
-        assert_eq!(state_size, state.len(), "State helper should return the advertised size");
-        assert!(set_full_state(&state), "Setting the captured state back should succeed");
+        assert_eq!(total_state_size, current_state.len(), "State helper should return the advertised size");
+        assert!(set_state(&current_state), "Setting the captured state back should succeed");
 
-        let round_trip = full_state();
-        assert_eq!(state.len(), round_trip.len(), "Round-tripped state should keep the same size");
+        let round_trip = state();
+        assert_eq!(current_state.len(), round_trip.len(), "Round-tripped state should keep the same size");
     }
 
     #[test]
     fn test_metadata_is_self_consistent() {
-        let metadata = get_all_var_metadata();
+        let metadata = all_var_metadata();
         for var in metadata.iter() {
             let name = String::from_utf8_lossy(&var.name).trim_matches(char::from(0)).to_string();
             assert!(!name.is_empty(), "Metadata entries should have a readable name");

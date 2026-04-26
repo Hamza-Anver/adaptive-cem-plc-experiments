@@ -63,24 +63,24 @@ pub fn step(inputs: &[u8]) {
 }
 
 #[allow(dead_code)]
-pub fn step_time_series(inputs: &[u8], bytes_per_tick: usize) {
-    if bytes_per_tick == 0 {
+pub fn step_series(inputs: &[u8], bytes_per_step: usize) {
+    if bytes_per_step == 0 {
         return;
     }
 
     let mut offset = 0;
-    while offset + bytes_per_tick <= inputs.len() {
-        step(&inputs[offset..offset + bytes_per_tick]);
-        offset += bytes_per_tick;
+    while offset + bytes_per_step <= inputs.len() {
+        step(&inputs[offset..offset + bytes_per_step]);
+        offset += bytes_per_step;
     }
 }
 
-pub fn full_state_size() -> usize {
+pub fn state_size() -> usize {
     unsafe { plc_get_full_state_size() }
 }
 
-pub fn full_state() -> Vec<u8> {
-    let size = full_state_size();
+pub fn state() -> Vec<u8> {
+    let size = state_size();
     let mut buffer = vec![0u8; size];
     if size == 0 {
         return buffer;
@@ -93,11 +93,11 @@ pub fn full_state() -> Vec<u8> {
     buffer
 }
 
-pub fn set_full_state(state: &[u8]) -> bool {
+pub fn set_state(state: &[u8]) -> bool {
     unsafe { plc_set_full_state(state.as_ptr(), state.len()) }
 }
 
-pub fn get_all_var_metadata() -> Vec<PlcVarMeta> {
+pub fn all_var_metadata() -> Vec<PlcVarMeta> {
     let mut metadata_list = Vec::new();
     unsafe {
         let var_count = plc_get_var_count();
@@ -247,14 +247,14 @@ fn encode_value_to_state(state: &mut [u8], meta: &PlcVarMeta, value: PlcValue) -
 
 fn metadata_map() -> HashMap<String, PlcVarMeta> {
     let mut map = HashMap::new();
-    for meta in get_all_var_metadata() {
+    for meta in all_var_metadata() {
         map.insert(meta_name(&meta), meta);
     }
     map
 }
 
-pub fn get_var_values(names: Option<&[String]>) -> Result<Vec<(String, PlcValue)>, String> {
-    let state = full_state();
+pub fn var_values(names: Option<&[String]>) -> Result<Vec<(String, PlcValue)>, String> {
+    let state = state();
     let meta_map = metadata_map();
 
     let target_names: Vec<String> = match names {
@@ -273,15 +273,15 @@ pub fn get_var_values(names: Option<&[String]>) -> Result<Vec<(String, PlcValue)
     Ok(out)
 }
 
-pub fn get_var_types() -> HashMap<String, PlcVarType> {
+pub fn var_types() -> HashMap<String, PlcVarType> {
     metadata_map()
         .into_iter()
         .map(|(name, meta)| (name, meta.var_type))
         .collect()
 }
 
-pub fn set_var_values(values: &[(String, PlcValue)]) -> Result<(), String> {
-    let mut state = full_state();
+pub fn write_var_values(values: &[(String, PlcValue)]) -> Result<(), String> {
+    let mut state = state();
     let meta_map = metadata_map();
 
     for (name, value) in values {
@@ -291,8 +291,8 @@ pub fn set_var_values(values: &[(String, PlcValue)]) -> Result<(), String> {
         encode_value_to_state(&mut state, meta, *value)?;
     }
 
-    if !set_full_state(&state) {
-        return Err("plc_set_full_state failed".to_string());
+    if !set_state(&state) {
+        return Err("set_state failed".to_string());
     }
     Ok(())
 }

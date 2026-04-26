@@ -4,7 +4,7 @@ Test script to verify Python bindings can access C program variables via Rust li
 """
 
 import sys
-from libafl_sandbox import PyTargetSession
+from libafl_sandbox import TargetSession
 
 def main():
     print("=" * 60)
@@ -13,8 +13,8 @@ def main():
     
     try:
         # Create and boot target session
-        print("\n[1] Creating PyTargetSession...")
-        session = PyTargetSession()
+        print("\n[1] Creating TargetSession...")
+        session = TargetSession()
         print(f"    Session created: {session}")
         
         print("\n[2] Booting target...")
@@ -28,12 +28,12 @@ def main():
         
         # Test full state size
         print("\n[4] Reading full state size...")
-        state_sz = session.full_state_size()
+        state_sz = session.state_size()
         print(f"    State size: {state_sz} bytes")
         
         # Test reading variable metadata (this is the main test)
         print("\n[5] Reading C program variable metadata...")
-        var_metadata = session.get_all_var_metadata()
+        var_metadata = session.var_metadata()
         print(f"    Found {len(var_metadata)} variables:")
         
         if var_metadata:
@@ -44,14 +44,14 @@ def main():
             print("      (No variables returned)")
 
         print("\n[6] Reading variables as a dict...")
-        vars_before = session.get_vars()
+        vars_before = session.read_vars()
         print(f"    Read {len(vars_before)} variables via dict API")
 
         print("\n[7] Setting one variable from dict...")
         phase_before = int(vars_before["phase"])
         phase_after = phase_before + 1
-        session.set_vars({"phase": phase_after})
-        vars_after = session.get_vars(["phase"])
+        session.write_vars({"phase": phase_after})
+        vars_after = session.read_vars(["phase"])
         if int(vars_after["phase"]) != phase_after:
             raise RuntimeError("phase was not updated correctly")
         print(f"    phase changed from {phase_before} to {phase_after}")
