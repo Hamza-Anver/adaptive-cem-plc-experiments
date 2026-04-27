@@ -196,7 +196,7 @@ class SearchConfig:
     target_goal: float = 64.0
     discovery_interval: int = 15
     max_progress_vars: int = 4
-    max_outer_iterations: int = 5000
+    max_outer_iterations: int = 50000
     stagnation_limit: int = 45
     horizon: int = 32
     population: int = 384

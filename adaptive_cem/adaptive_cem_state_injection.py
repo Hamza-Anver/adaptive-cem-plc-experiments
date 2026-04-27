@@ -1,6 +1,28 @@
 #!/usr/bin/env python3
 """
 Hybrid Go-Explore + CEM with ML Deduction, Heuristic Pruning, and Stagnation Breaking.
+
+Extended with Technique 1 — Counterfactual State Injection (CSIS):
+
+The core bottleneck in the baseline fuzzer is a credit-assignment cliff: the PLC must
+traverse IDLE→PRIME→FLOW→FILL across ~200+ ticks before fill_head can move at all, so a
+CEM rollout that stalls in PRIME produces zero gradient toward learning FILL zone behavior.
+
+CSIS exploits the existing plc_set_full_state() infrastructure to seed the archive with
+synthetic PLC states at each fill_head zone boundary (8, 16, 24, 32, 40, 48, 56) before
+the main fuzzing loop begins. Each synthetic state has phase=FILL, fill_head=K, and all
+accumulators pre-charged above their advancement thresholds. The CEM then only needs to
+learn the short-horizon zone-specific behavior (which 3-4 bytes to use for the current
+zone's constraint window), not the full 600-tick end-to-end sequence.
+
+Each synthetic state is validated at startup: it is injected into the PLC, one tick is
+stepped with a known-safe input for that zone, and the result is checked to confirm
+fill_head did not regress. Invalid states (e.g., caused by struct alignment mismatches)
+are silently skipped.
+
+Synthetic archive entries are marked with is_synthetic=True. The archive's select() method
+always prefers real entries in the top candidate pool; synthetics serve as fallback seeds
+for zone boundaries that no real rollout has yet reached.
 """
 
 from __future__ import annotations
@@ -10,15 +32,14 @@ import copy
 import math
 import random
 import statistics
+import struct
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
 
 from libafl_sandbox import TargetSession
 
@@ -34,6 +55,39 @@ ACTION_NAMES = [
 ANALOG_DIMS = 6
 ACTION_LOW = [0, 0, 0, 0, 0, 0, 0]
 ACTION_HIGH = [255, 255, 255, 255, 255, 255, 1]
+
+# Per-zone validation inputs for synthetic state probing.
+# Format: [pump_rate, valve_pos, pipe_temp, back_pressure, feed_conc, coolant_rate, cmd]
+# Each row is crafted to satisfy both the accumulator maintenance conditions and the
+# zone-specific constraint window (current_pv and pipe_temp ranges from pipeline_deep_oob.c).
+#
+# Accumulator rules (shared across all zones in FILL):
+#   flow_accum:  pump_rate  ∈ [40, 90]
+#   press_accum: back_pressure ∈ [30, 80]
+#   temp_accum:  pipe_temp  ∈ [50, 100]
+#
+# Zone constraint windows:
+#   zone 0 (fill_head 0-7):   current_pv ∈ [60,90],  pipe_temp ∈ [50,65]
+#   zone 1 (fill_head 8-15):  current_pv ∈ [80,110], pipe_temp ∈ [62,77]
+#   zone 2 (fill_head 16-23): current_pv ∈ [70,100], pipe_temp ∈ [72,87]
+#   zone 3 (fill_head 24-31): current_pv ∈ [55,85],  pipe_temp ∈ [65,80]
+#   zone 4 (fill_head 32-39): current_pv ∈ [95,125], pipe_temp ∈ [55,70]
+#   zone 5 (fill_head 40-47): current_pv ∈ [65,95],  pipe_temp ∈ [78,93]
+#   zone 6 (fill_head 48-55): current_pv ∈ [85,115], pipe_temp ∈ [52,67]
+#   zone 7 (fill_head 56-63): current_pv ∈ [75,105], pipe_temp ∈ [63,78]
+ZONE_VALIDATION_INPUTS: List[List[int]] = [
+    [50, 20, 57, 55, 40, 40, 0],  # zone 0: pv=70  ∈[60,90],  temp=57 ∈[50,65]
+    [60, 30, 69, 55, 40, 40, 0],  # zone 1: pv=90  ∈[80,110], temp=69 ∈[62,77]
+    [55, 30, 79, 55, 40, 40, 0],  # zone 2: pv=85  ∈[70,100], temp=79 ∈[72,87]
+    [50, 20, 72, 55, 40, 40, 0],  # zone 3: pv=70  ∈[55,85],  temp=72 ∈[65,80]
+    [65, 45, 62, 55, 40, 40, 0],  # zone 4: pv=110 ∈[95,125], temp=62 ∈[55,70]
+    [55, 25, 85, 55, 40, 40, 0],  # zone 5: pv=80  ∈[65,95],  temp=85 ∈[78,93]
+    [60, 40, 59, 55, 40, 40, 0],  # zone 6: pv=100 ∈[85,115], temp=59 ∈[52,67]
+    [55, 35, 70, 55, 40, 40, 0],  # zone 7: pv=90  ∈[75,105], temp=70 ∈[63,78]
+]
+
+# fill_head values at which synthetic states are seeded (one per zone boundary, skipping 0).
+SYNTHETIC_MILESTONES: List[int] = [8, 16, 24, 32, 40, 48, 56]
 
 
 class RustPipelinePLC:
@@ -103,14 +157,71 @@ class RustPipelinePLC:
         return self.session.rollout_states_batch(initial_states, action_u8)
 
 
+def _var_meta_attrs(meta_obj) -> Tuple[str, int, int]:
+    """Extract (name, offset, size) from a PlcVarMeta object.
+
+    Direct attribute access works after py.rs is rebuilt with #[pyo3(get)].
+    The repr fallback handles older compiled binaries that lack the getters.
+    """
+    try:
+        return meta_obj.name, meta_obj.offset, meta_obj.size
+    except AttributeError:
+        import re
+        r = repr(meta_obj)
+        name = re.search(r"name='([^']+)'", r).group(1)
+        size = int(re.search(r"size=(\d+)", r).group(1))
+        offset = int(re.search(r"offset=(\d+)", r).group(1))
+        return name, offset, size
+
+
+def build_synthetic_fill_state(session: TargetSession, fill_head_target: int) -> bytes:
+    """Construct a raw PipelineState byte buffer at a given fill_head value.
+
+    Uses var_metadata() offsets so the layout never needs to be hardcoded.
+    All accumulators are pre-charged above their advancement thresholds so that
+    fill_head can advance on the next tick.
+
+    Phase counter is set so that the VERY NEXT tick triggers a fill_head increment
+    (phase_counter % 4 transitions to 0 after the counter is incremented at tick start).
+
+    The buffer[64] region is zeroed (bytearray default). The status byte (int8_t,
+    not exposed in metadata) is written at the byte immediately following pv_sum.
+    """
+    state_size = session.state_size()
+    buf = bytearray(state_size)
+
+    offsets = {n: (o, s) for n, o, s in (_var_meta_attrs(m) for m in session.var_metadata())}
+
+    def write_i32(field_name: str, value: int) -> None:
+        off, sz = offsets[field_name]
+        buf[off : off + sz] = struct.pack("<i", value)
+
+    write_i32("phase", 3)                               # PHASE_FILL = 3
+    write_i32("cycle_count", fill_head_target * 4 + 100)
+    write_i32("prime_cycles", 25)
+    write_i32("prime_score", 10)                        # >= 8: past PRIME gate
+    write_i32("flux_score", 10)                         # >= 8: past FLOW gate
+    write_i32("flow_accum", 8)                          # > 6: flow advancement active
+    write_i32("press_accum", 7)                         # > 5: pressure advancement active
+    write_i32("temp_accum", 8)                          # > 6: temp advancement active
+    # phase_counter % 4 == 3 → after the mandatory increment at tick start it becomes
+    # 0 mod 4, which is the advancement condition.  fill_head_target * 4 - 1 is always
+    # >= 31 for the smallest milestone (fill_head=8), safely positive.
+    write_i32("phase_counter", fill_head_target * 4 - 1)
+    write_i32("fill_head", fill_head_target)
+    write_i32("pv_sum", 0)
+
+    # status (int8_t) is not exposed in metadata; it sits immediately after pv_sum.
+    pv_off, pv_sz = offsets["pv_sum"]
+    buf[pv_off + pv_sz] = 3  # PHASE_FILL
+
+    return bytes(buf)
+
+
 class ProgressVariableDiscoverer:
-    def __init__(self, target_var: str, max_vars: int = 5, n_regimes: int = 5, hints: List[str] = None):
+    def __init__(self, target_var: str, max_vars: int = 5):
         self.target_var = target_var
         self.max_vars = max_vars
-        self.n_regimes = n_regimes
-        # User-specified variables that are always included regardless of ML output.
-        # They bypass heuristic filters and count against max_vars.
-        self.hints: List[str] = [v for v in (hints or []) if v != target_var]
         self.data_buffer = deque(maxlen=15000)
         self.target_buffer = deque(maxlen=15000)
 
@@ -142,16 +253,6 @@ class ProgressVariableDiscoverer:
 
         return valid_cols
 
-    def _apply_hints(self, discovered: List[str]) -> List[str]:
-        """Prepend pinned hint variables, fill remaining slots from discovered."""
-        result = list(self.hints)
-        remaining = self.max_vars - len(result)
-        for v in discovered:
-            if v not in result and remaining > 0:
-                result.append(v)
-                remaining -= 1
-        return result
-
     def analyze(self, current_vars: List[str], force_random: bool = False) -> List[str]:
         if len(self.data_buffer) < 200 and not force_random:
             return current_vars
@@ -166,74 +267,32 @@ class ProgressVariableDiscoverer:
 
         if force_random:
             print("  -> [STAGNATION DETECTED] Bypassing ML. Injecting random variables to explore new state spaces.")
-            # Hints are always kept; random injection fills remaining slots.
-            slots = self.max_vars - len(self.hints)
-            current_set = set(current_vars) | set(self.hints)
+            k = min(self.max_vars, len(valid_cols))
+            current_set = set(current_vars)
             preferred = [col for col in valid_cols if col not in current_set]
 
-            if not preferred and not self.hints:
+            if not preferred:
                 print("  -> [STAGNATION DETECTED] No alternative variables available; keeping current set.")
                 return current_vars
 
-            chosen: List[str] = []
-            if len(preferred) >= slots:
-                chosen = random.sample(preferred, slots)
-            else:
-                chosen = preferred[:]
-                needed = slots - len(chosen)
-                fallback_pool = [col for col in valid_cols if col not in chosen and col not in self.hints]
-                if needed > 0 and fallback_pool:
-                    chosen.extend(random.sample(fallback_pool, min(needed, len(fallback_pool))))
-            return self._apply_hints(chosen)
+            if len(preferred) >= k:
+                return random.sample(preferred, k)
+
+            chosen = preferred[:]
+            needed = k - len(chosen)
+            fallback_pool = [col for col in valid_cols if col not in chosen]
+            if needed > 0 and fallback_pool:
+                chosen.extend(random.sample(fallback_pool, min(needed, len(fallback_pool))))
+            return chosen
 
         y = np.array(self.target_buffer)
         if np.std(y) < 1e-5:
             variances = df[valid_cols].var().sort_values(ascending=False)
-            top_by_var = variances.index[: self.max_vars].tolist()
-            return self._apply_hints(top_by_var)
+            return variances.index[: self.max_vars].tolist()
 
-        X_raw = df[valid_cols]
-
-        # Regime detection: include fill_head in clustering so clusters align with
-        # actual target zones, then train the RF only on the frontier cluster.
-        MIN_CLUSTER = 80
-        k = min(self.n_regimes, len(X_raw) // MIN_CLUSTER)
-        X_fit, y_fit = X_raw, y  # default: use all data
-
-        if k >= 2:
-            # Cluster on valid_cols + target so zones are distinguished by fill_head level.
-            cluster_cols = valid_cols + [self.target_var]
-            X_cluster = df[cluster_cols]
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X_cluster)
-
-            km = KMeans(n_clusters=k, n_init=5, random_state=42)
-            labels = km.fit_predict(X_scaled)
-
-            # Frontier = cluster with the highest mean fill_head among its member states.
-            cluster_fill_head_means = {
-                c: df[self.target_var].values[labels == c].mean() for c in range(k)
-            }
-            frontier = max(cluster_fill_head_means, key=cluster_fill_head_means.get)
-            mask = labels == frontier
-            n_frontier = int(mask.sum())
-
-            if n_frontier >= MIN_CLUSTER:
-                X_fit, y_fit = X_raw[mask], y[mask]
-                print(
-                    f"  [regime] k={k}, frontier cluster {frontier}"
-                    f" (mean {self.target_var}={cluster_fill_head_means[frontier]:.1f}, n={n_frontier})"
-                )
-            else:
-                print(f"  [regime] frontier cluster too small ({n_frontier} rows), using all data")
-        else:
-            print(f"  [regime] not enough data for {self.n_regimes} clusters, using all data")
-
-        if self.hints:
-            print(f"  [hints] pinned: {self.hints}")
-
+        X = df[valid_cols]
         rf = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=42, n_jobs=-1)
-        rf.fit(X_fit, y_fit)
+        rf.fit(X, y)
 
         importances = rf.feature_importances_
         sorted_idx = np.argsort(importances)[::-1]
@@ -245,7 +304,7 @@ class ProgressVariableDiscoverer:
                 if len(best_vars) >= self.max_vars:
                     break
 
-        return self._apply_hints(best_vars if best_vars else current_vars)
+        return best_vars if best_vars else current_vars
 
 
 @dataclass
@@ -260,9 +319,6 @@ class SearchConfig:
     population: int = 384
     cem_generations: int = 5
     elite_fraction: float = 0.12
-    n_regimes: int = 5  # KMeans clusters for regime-aware variable selection
-    # Variables always tracked as progress indicators regardless of ML output.
-    progress_hints: List[str] = field(default_factory=lambda: ["phase"])
 
 
 @dataclass
@@ -271,6 +327,7 @@ class ArchiveEntry:
     trajectory: List[List[int]]
     score: float
     target: float
+    is_synthetic: bool = False  # CSIS: synthetic entries are fallback seeds only
 
 
 class StateObjective:
@@ -343,17 +400,57 @@ class StateArchive:
 
         return changed
 
+    def add_synthetic(self, state: Dict[str, Any]) -> None:
+        """Insert a synthetic CSIS seed into the archive.
+
+        Differences from add():
+        - Does NOT call update_records() — synthetic values must not skew the
+          normalization ranges used by state_score() and cell().
+        - Does NOT update best_target / best_entry — synthetic states are not
+          real progress; they must not reset the stagnation counter.
+        - Only inserts if no real entry already occupies the same cell, so a
+          synthetic seed can never displace hard-won real data.
+        """
+        score = self.objective.state_score(state)
+        target = float(state.get(self.objective.config.target_var, 0.0))
+        cell = self.objective.cell(state)
+
+        existing = self.entries_by_cell.get(cell)
+        if existing is None:
+            self.entries_by_cell[cell] = ArchiveEntry(
+                copy.deepcopy(state),
+                [],          # no trajectory: the synthetic state is a teleport origin
+                score,
+                target,
+                is_synthetic=True,
+            )
+        elif existing.is_synthetic and score > existing.score:
+            # Replace a worse synthetic with a better synthetic (should be rare).
+            self.entries_by_cell[cell] = ArchiveEntry(
+                copy.deepcopy(state), [], score, target, is_synthetic=True
+            )
+        # Real entries are never overwritten by a synthetic.
+
     def reindex(self) -> None:
         old_entries = list(self.entries_by_cell.values())
         self.entries_by_cell.clear()
         for entry in old_entries:
-            self.add(entry.state, entry.trajectory)
+            if entry.is_synthetic:
+                self.add_synthetic(entry.state)
+            else:
+                self.add(entry.state, entry.trajectory)
 
     def select(self) -> ArchiveEntry:
         entries = sorted(self.entries_by_cell.values(), key=lambda e: (e.target, e.score), reverse=True)
         candidates = entries[: max(1, int(len(entries) * 0.15))]
-        weights = [max(1e-6, e.score + 1.0) for e in candidates]
-        return random.choices(candidates, weights=weights, k=1)[0]
+
+        # Prefer real entries: only fall back to synthetic seeds when no real
+        # entry exists in the frontier candidate pool.
+        real_candidates = [e for e in candidates if not e.is_synthetic]
+        pool = real_candidates if real_candidates else candidates
+
+        weights = [max(1e-6, e.score + 1.0) for e in pool]
+        return random.choices(pool, weights=weights, k=1)[0]
 
 
 class MLGoExploreCEM:
@@ -363,15 +460,85 @@ class MLGoExploreCEM:
         self.rng = random.Random(42)
         self.objective = StateObjective(config)
         self.archive = StateArchive(self.objective, self.rng)
-        self.discoverer = ProgressVariableDiscoverer(
-            config.target_var, config.max_progress_vars, config.n_regimes, config.progress_hints
-        )
+        self.discoverer = ProgressVariableDiscoverer(config.target_var, config.max_progress_vars)
         self.stagnation_counter = 0
         self.last_best_target = -math.inf
 
+    # ------------------------------------------------------------------
+    # CSIS: Counterfactual State Injection
+    # ------------------------------------------------------------------
+
+    def _seed_synthetic_milestones(self) -> None:
+        """Build, validate, and insert synthetic FILL states into the archive.
+
+        For each milestone in SYNTHETIC_MILESTONES:
+        1. Construct a PipelineState bytes object via build_synthetic_fill_state().
+        2. Save the current PLC state (IDLE at startup).
+        3. Inject the synthetic state via session.set_state().
+        4. Execute one tick with the zone-specific ZONE_VALIDATION_INPUTS entry.
+        5. Decode the resulting state and confirm fill_head did not regress.
+        6. Restore the PLC to its original state.
+        7. If valid, call archive.add_synthetic() with the decoded state.
+
+        The validation probe catches struct alignment mismatches or accumulator
+        misconfiguration before they can corrupt the archive.
+        """
+        print("[CSIS] Seeding synthetic fill_head milestones...")
+        saved_raw = self.plc.session.state()
+        seeded = 0
+
+        for fill_head_target in SYNTHETIC_MILESTONES:
+            zone = fill_head_target // 8
+            val_input = ZONE_VALIDATION_INPUTS[zone]
+
+            # Build the synthetic state bytes.
+            synthetic_raw = build_synthetic_fill_state(self.plc.session, fill_head_target)
+
+            # Validate: inject → step → check.
+            try:
+                self.plc.session.set_state(synthetic_raw)
+                self.plc.session.step(bytes(val_input))
+                result_raw = self.plc.session.state()
+                result = self.plc.decode_raw_state(result_raw)
+            except Exception as exc:
+                print(f"  [CSIS] fill_head={fill_head_target}: validation error ({exc}), skipping.")
+                continue
+            finally:
+                # Always restore to the original state, even on exception.
+                self.plc.session.set_state(saved_raw)
+
+            result_fh = int(result.get("fill_head", -1))
+            if result_fh < fill_head_target - 1:
+                print(
+                    f"  [CSIS] fill_head={fill_head_target}: validation failed "
+                    f"(result fill_head={result_fh}), skipping."
+                )
+                continue
+
+            # The validated result state (post-tick) is what we archive, not the
+            # raw synthetic bytes.  This gives the CEM a state that has already
+            # survived one zone-valid tick, so it is guaranteed to be in a
+            # forward-progressing configuration.
+            result["_raw_state"] = result_raw
+            self.archive.add_synthetic(result)
+            seeded += 1
+            print(f"  [CSIS] fill_head={fill_head_target} -> validated at fill_head={result_fh}, seeded zone {zone}.")
+
+        print(f"[CSIS] Seeded {seeded}/{len(SYNTHETIC_MILESTONES)} milestones. "
+              f"Archive size: {len(self.archive.entries_by_cell)} cells.\n")
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
     def run(self) -> None:
         self.plc.reset_state()
-        self.archive.add(self.plc.get_state(), [])
+        initial_state = self.plc.get_state()
+        self.archive.add(initial_state, [])
+
+        # CSIS: inject synthetic milestone seeds before the main loop.
+        self._seed_synthetic_milestones()
+
         print(f"Starting Intelligent Search for Target: {self.config.target_var}")
 
         for iteration in range(1, self.config.max_outer_iterations + 1):
@@ -411,9 +578,13 @@ class MLGoExploreCEM:
                     print("  -> [STAGNATION DETECTED] Variable set unchanged; retrying forced selection next discovery interval.")
 
             if iteration % 5 == 0:
+                synthetic_count = sum(1 for e in self.archive.entries_by_cell.values() if e.is_synthetic)
+                real_count = len(self.archive.entries_by_cell) - synthetic_count
                 print(
                     f"Iter {iteration:03d} | Best: {self.archive.best_target} | "
-                    f"Cells: {len(self.archive.entries_by_cell)} | Stagnation: {self.stagnation_counter}"
+                    f"Cells: {len(self.archive.entries_by_cell)} "
+                    f"(real={real_count}, synthetic={synthetic_count}) | "
+                    f"Stagnation: {self.stagnation_counter}"
                 )
 
             if self.archive.best_target >= self.config.target_goal:
@@ -422,7 +593,7 @@ class MLGoExploreCEM:
 
     def run_cem(self, parent: ArchiveEntry) -> List[Tuple]:
         mean = [[127.5] * ANALOG_DIMS for _ in range(self.config.horizon)]
-        std  = [[90.0]  * ANALOG_DIMS for _ in range(self.config.horizon)]
+        std = [[90.0] * ANALOG_DIMS for _ in range(self.config.horizon)]
         if parent.trajectory:
             last_a = parent.trajectory[-1]
             for t in range(self.config.horizon):

@@ -1,6 +1,32 @@
 #!/usr/bin/env python3
 """
 Hybrid Go-Explore + CEM with ML Deduction, Heuristic Pruning, and Stagnation Breaking.
+
+Extended with Technique 2 — Interventional Input Attribution Maps (IIAM):
+
+The baseline CEM treats all 7 input bytes uniformly, maintaining independent Gaussians
+for every byte at every timestep. But the PLC's logic makes this wasteful: in PRIME phase,
+only pump_rate (byte 0), back_pressure (byte 3), and valve_pos (byte 1) affect prime_score;
+the other three analog bytes have exactly zero causal effect and waste 3/6 of the CEM's
+sampling budget. In FILL zones, only specific (pump+valve, pipe_temp) windows matter per
+zone, while feed_conc and coolant_rate are irrelevant.
+
+IIAM computes a numerical Jacobian of the target variable with respect to each analog input
+byte via paired interventional rollouts: for each of the 6 analog bytes, two extra rollouts
+are run — one with that byte perturbed +δ across all timesteps, one with -δ. The central
+difference in the maximum target-variable value achieved over the horizon gives the causal
+attribution of that byte from the current parent state.
+
+Attribution is converted to per-byte standard deviations for the CEM:
+  - High attribution → narrow std (CEM focuses on this byte's effective range)
+  - Zero attribution → wide std (explore freely; byte has no effect here)
+
+The overhead is 2 × ANALOG_DIMS = 12 extra rollouts per outer CEM call, paid once before
+generation 0. Results are cached by (phase, fill_head_zone) so repeated selection of the
+same regime costs nothing.
+
+No Rust or C changes are required. IIAM uses only the existing rollout_states_batch and
+decode_raw_states_batch primitives.
 """
 
 from __future__ import annotations
@@ -11,14 +37,12 @@ import math
 import random
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
 
 from libafl_sandbox import TargetSession
 
@@ -34,6 +58,11 @@ ACTION_NAMES = [
 ANALOG_DIMS = 6
 ACTION_LOW = [0, 0, 0, 0, 0, 0, 0]
 ACTION_HIGH = [255, 255, 255, 255, 255, 255, 1]
+
+# IIAM hyper-parameters
+ATTR_DELTA: int = 16        # perturbation magnitude (~6% of 0-255 range)
+ATTR_STD_MIN: float = 6.0   # std floor for the byte with highest attribution
+ATTR_STD_MAX: float = 90.0  # std ceiling for bytes with zero attribution (baseline default)
 
 
 class RustPipelinePLC:
@@ -76,7 +105,7 @@ class RustPipelinePLC:
         return result[0]
 
     def decode_raw_states_batch(self, raw_states: np.ndarray) -> List[Dict[str, Any]]:
-        """Decode a (N, state_size) uint8 array into N dicts without touching global PLC state."""
+        """Decode a (..., state_size) uint8 array into N dicts without touching global PLC state."""
         flat = np.ascontiguousarray(raw_states.reshape(-1, raw_states.shape[-1]))
         decoded = self.session.decode_states_batch(flat)
         for i, row in enumerate(raw_states.reshape(-1, raw_states.shape[-1])):
@@ -103,14 +132,141 @@ class RustPipelinePLC:
         return self.session.rollout_states_batch(initial_states, action_u8)
 
 
+class InputAttributor:
+    """
+    Computes interventional input attribution maps for the CEM's analog input bytes.
+
+    For each of the ANALOG_DIMS (6) analog bytes, two rollouts are run from the current
+    parent state: one with that byte perturbed +ATTR_DELTA at every timestep, one with
+    -ATTR_DELTA. The central-difference change in the maximum target-variable value over
+    the horizon is the causal attribution of that byte.
+
+    Attribution is then mapped to per-byte CEM standard deviations:
+      - Byte with peak attribution → std = ATTR_STD_MIN (tight; CEM exploits valid range)
+      - Byte with zero attribution → std = ATTR_STD_MAX (wide; explore freely)
+      - Intermediate attribution  → linearly interpolated std
+
+    Results are cached by (phase, fill_head_zone). The cache is cleared when it exceeds
+    64 entries (32 unique phase×zone combinations × 2 for safety).
+    """
+
+    def __init__(self, target_var: str) -> None:
+        self.target_var = target_var
+        self._cache: Dict[Tuple[int, int], np.ndarray] = {}
+
+    def _regime_key(self, state: Dict[str, Any]) -> Tuple[int, int]:
+        phase = int(state.get("phase", 0))
+        fill_head = int(state.get(self.target_var, 0))
+        return (phase, fill_head // 8)
+
+    def _build_perturbed_batch(
+        self, ref_action: np.ndarray
+    ) -> np.ndarray:
+        """
+        Build the 12-rollout attribution batch from a reference action sequence.
+
+        ref_action: (H, 7) uint8 array — the reference action for all timesteps.
+
+        Returns: (2*ANALOG_DIMS, H, 7) uint8 array.
+          Row 2b:   ref with byte b += ATTR_DELTA at every timestep (clipped to ACTION_HIGH)
+          Row 2b+1: ref with byte b -= ATTR_DELTA at every timestep (clipped to ACTION_LOW)
+        """
+        H = ref_action.shape[0]
+        n_rollouts = 2 * ANALOG_DIMS
+
+        # Work in int16 to avoid uint8 overflow before clipping
+        batch = np.tile(ref_action.astype(np.int16), (n_rollouts, 1, 1))  # (12, H, 7)
+
+        for b in range(ANALOG_DIMS):
+            batch[2 * b,     :, b] += ATTR_DELTA
+            batch[2 * b + 1, :, b] -= ATTR_DELTA
+
+        low = np.array(ACTION_LOW,  dtype=np.int16)
+        high = np.array(ACTION_HIGH, dtype=np.int16)
+        return np.clip(batch, low, high).astype(np.uint8)
+
+    def compute(
+        self,
+        plc: RustPipelinePLC,
+        raw_parent: bytes,
+        ref_action: np.ndarray,
+        horizon: int,
+    ) -> np.ndarray:
+        """
+        Run 12 interventional rollouts and return an ANALOG_DIMS-length std array.
+
+        The cost is 12 rollouts — about 3% of a normal CEM generation (384 rollouts).
+        """
+        perturbed = self._build_perturbed_batch(ref_action)         # (12, H, 7)
+        raw_states = plc.rollout_states_batch(raw_parent, perturbed) # (12, H, state_size)
+        decoded = plc.decode_raw_states_batch(raw_states)            # list of 12*H dicts
+
+        attribution = np.zeros(ANALOG_DIMS, dtype=np.float32)
+        for b in range(ANALOG_DIMS):
+            # Maximum target_var observed over the horizon for +delta and -delta rollouts.
+            plus_max = max(
+                float(decoded[(2 * b) * horizon + t].get(self.target_var, 0.0))
+                for t in range(horizon)
+            )
+            minus_max = max(
+                float(decoded[(2 * b + 1) * horizon + t].get(self.target_var, 0.0))
+                for t in range(horizon)
+            )
+            attribution[b] = abs(plus_max - minus_max) / (2.0 * ATTR_DELTA)
+
+        peak = float(attribution.max())
+        if peak < 1e-6:
+            # No byte moved the target from this state; keep default wide std.
+            return np.full(ANALOG_DIMS, ATTR_STD_MAX, dtype=np.float32)
+
+        attr_norm = attribution / peak  # [0, 1], peak byte = 1.0
+        # High attribution (norm ≈ 1) → narrow std; zero attribution → wide std.
+        std_arr = ATTR_STD_MAX - (ATTR_STD_MAX - ATTR_STD_MIN) * attr_norm
+        return std_arr.clip(ATTR_STD_MIN, ATTR_STD_MAX).astype(np.float32)
+
+    def get_or_compute(
+        self,
+        plc: RustPipelinePLC,
+        parent: "ArchiveEntry",
+        ref_action: np.ndarray,
+        horizon: int,
+    ) -> np.ndarray:
+        """
+        Return cached attribution std for this regime, computing it if not yet cached.
+        """
+        key = self._regime_key(parent.state)
+        if key not in self._cache:
+            if len(self._cache) > 64:
+                self._cache.clear()
+
+            raw_parent = parent.state.get("_raw_state")
+            if not isinstance(raw_parent, (bytes, bytearray)):
+                plc.set_state(parent.state)
+                raw_parent = plc.session.state()
+
+            self._cache[key] = self.compute(plc, bytes(raw_parent), ref_action, horizon)
+
+        return self._cache[key]
+
+    def log_summary(self, state: Dict[str, Any]) -> None:
+        """Print a human-readable attribution summary for the current regime."""
+        key = self._regime_key(state)
+        if key not in self._cache:
+            return
+        std_arr = self._cache[key]
+        phase_names = {0: "IDLE", 1: "PRIME", 2: "FLOW", 3: "FILL"}
+        phase_str = phase_names.get(key[0], str(key[0]))
+        entries = ", ".join(
+            f"{ACTION_NAMES[b]}={std_arr[b]:.1f}"
+            for b in range(ANALOG_DIMS)
+        )
+        print(f"  [IIAM] {phase_str}/zone{key[1]}: {entries}")
+
+
 class ProgressVariableDiscoverer:
-    def __init__(self, target_var: str, max_vars: int = 5, n_regimes: int = 5, hints: List[str] = None):
+    def __init__(self, target_var: str, max_vars: int = 5):
         self.target_var = target_var
         self.max_vars = max_vars
-        self.n_regimes = n_regimes
-        # User-specified variables that are always included regardless of ML output.
-        # They bypass heuristic filters and count against max_vars.
-        self.hints: List[str] = [v for v in (hints or []) if v != target_var]
         self.data_buffer = deque(maxlen=15000)
         self.target_buffer = deque(maxlen=15000)
 
@@ -142,16 +298,6 @@ class ProgressVariableDiscoverer:
 
         return valid_cols
 
-    def _apply_hints(self, discovered: List[str]) -> List[str]:
-        """Prepend pinned hint variables, fill remaining slots from discovered."""
-        result = list(self.hints)
-        remaining = self.max_vars - len(result)
-        for v in discovered:
-            if v not in result and remaining > 0:
-                result.append(v)
-                remaining -= 1
-        return result
-
     def analyze(self, current_vars: List[str], force_random: bool = False) -> List[str]:
         if len(self.data_buffer) < 200 and not force_random:
             return current_vars
@@ -166,74 +312,32 @@ class ProgressVariableDiscoverer:
 
         if force_random:
             print("  -> [STAGNATION DETECTED] Bypassing ML. Injecting random variables to explore new state spaces.")
-            # Hints are always kept; random injection fills remaining slots.
-            slots = self.max_vars - len(self.hints)
-            current_set = set(current_vars) | set(self.hints)
+            k = min(self.max_vars, len(valid_cols))
+            current_set = set(current_vars)
             preferred = [col for col in valid_cols if col not in current_set]
 
-            if not preferred and not self.hints:
+            if not preferred:
                 print("  -> [STAGNATION DETECTED] No alternative variables available; keeping current set.")
                 return current_vars
 
-            chosen: List[str] = []
-            if len(preferred) >= slots:
-                chosen = random.sample(preferred, slots)
-            else:
-                chosen = preferred[:]
-                needed = slots - len(chosen)
-                fallback_pool = [col for col in valid_cols if col not in chosen and col not in self.hints]
-                if needed > 0 and fallback_pool:
-                    chosen.extend(random.sample(fallback_pool, min(needed, len(fallback_pool))))
-            return self._apply_hints(chosen)
+            if len(preferred) >= k:
+                return random.sample(preferred, k)
+
+            chosen = preferred[:]
+            needed = k - len(chosen)
+            fallback_pool = [col for col in valid_cols if col not in chosen]
+            if needed > 0 and fallback_pool:
+                chosen.extend(random.sample(fallback_pool, min(needed, len(fallback_pool))))
+            return chosen
 
         y = np.array(self.target_buffer)
         if np.std(y) < 1e-5:
             variances = df[valid_cols].var().sort_values(ascending=False)
-            top_by_var = variances.index[: self.max_vars].tolist()
-            return self._apply_hints(top_by_var)
+            return variances.index[: self.max_vars].tolist()
 
-        X_raw = df[valid_cols]
-
-        # Regime detection: include fill_head in clustering so clusters align with
-        # actual target zones, then train the RF only on the frontier cluster.
-        MIN_CLUSTER = 80
-        k = min(self.n_regimes, len(X_raw) // MIN_CLUSTER)
-        X_fit, y_fit = X_raw, y  # default: use all data
-
-        if k >= 2:
-            # Cluster on valid_cols + target so zones are distinguished by fill_head level.
-            cluster_cols = valid_cols + [self.target_var]
-            X_cluster = df[cluster_cols]
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X_cluster)
-
-            km = KMeans(n_clusters=k, n_init=5, random_state=42)
-            labels = km.fit_predict(X_scaled)
-
-            # Frontier = cluster with the highest mean fill_head among its member states.
-            cluster_fill_head_means = {
-                c: df[self.target_var].values[labels == c].mean() for c in range(k)
-            }
-            frontier = max(cluster_fill_head_means, key=cluster_fill_head_means.get)
-            mask = labels == frontier
-            n_frontier = int(mask.sum())
-
-            if n_frontier >= MIN_CLUSTER:
-                X_fit, y_fit = X_raw[mask], y[mask]
-                print(
-                    f"  [regime] k={k}, frontier cluster {frontier}"
-                    f" (mean {self.target_var}={cluster_fill_head_means[frontier]:.1f}, n={n_frontier})"
-                )
-            else:
-                print(f"  [regime] frontier cluster too small ({n_frontier} rows), using all data")
-        else:
-            print(f"  [regime] not enough data for {self.n_regimes} clusters, using all data")
-
-        if self.hints:
-            print(f"  [hints] pinned: {self.hints}")
-
+        X = df[valid_cols]
         rf = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=42, n_jobs=-1)
-        rf.fit(X_fit, y_fit)
+        rf.fit(X, y)
 
         importances = rf.feature_importances_
         sorted_idx = np.argsort(importances)[::-1]
@@ -245,7 +349,7 @@ class ProgressVariableDiscoverer:
                 if len(best_vars) >= self.max_vars:
                     break
 
-        return self._apply_hints(best_vars if best_vars else current_vars)
+        return best_vars if best_vars else current_vars
 
 
 @dataclass
@@ -260,9 +364,6 @@ class SearchConfig:
     population: int = 384
     cem_generations: int = 5
     elite_fraction: float = 0.12
-    n_regimes: int = 5  # KMeans clusters for regime-aware variable selection
-    # Variables always tracked as progress indicators regardless of ML output.
-    progress_hints: List[str] = field(default_factory=lambda: ["phase"])
 
 
 @dataclass
@@ -363,9 +464,8 @@ class MLGoExploreCEM:
         self.rng = random.Random(42)
         self.objective = StateObjective(config)
         self.archive = StateArchive(self.objective, self.rng)
-        self.discoverer = ProgressVariableDiscoverer(
-            config.target_var, config.max_progress_vars, config.n_regimes, config.progress_hints
-        )
+        self.discoverer = ProgressVariableDiscoverer(config.target_var, config.max_progress_vars)
+        self.attributor = InputAttributor(config.target_var)
         self.stagnation_counter = 0
         self.last_best_target = -math.inf
 
@@ -407,7 +507,6 @@ class MLGoExploreCEM:
                     if force_random:
                         self.stagnation_counter = 0
                 elif force_random:
-                    # Keep retrying forced-random at each discovery tick until variables actually change.
                     print("  -> [STAGNATION DETECTED] Variable set unchanged; retrying forced selection next discovery interval.")
 
             if iteration % 5 == 0:
@@ -416,17 +515,41 @@ class MLGoExploreCEM:
                     f"Cells: {len(self.archive.entries_by_cell)} | Stagnation: {self.stagnation_counter}"
                 )
 
+            # Periodically log the current regime's attribution map.
+            if iteration % 25 == 0:
+                self.attributor.log_summary(parent.state)
+
             if self.archive.best_target >= self.config.target_goal:
                 print(f"\nGoal Reached! Optimal sequence length: {len(self.archive.best_entry.trajectory)}")
                 return
 
     def run_cem(self, parent: ArchiveEntry) -> List[Tuple]:
+        # Build the reference action sequence used for attribution.
+        # Default: midpoint of action ranges. Override with parent's last action if available.
+        ref_action = np.full(
+            (self.config.horizon, len(ACTION_LOW)), 127, dtype=np.uint8
+        )
+        ref_action[:, 6] = 0  # cmd byte off by default
+
         mean = [[127.5] * ANALOG_DIMS for _ in range(self.config.horizon)]
-        std  = [[90.0]  * ANALOG_DIMS for _ in range(self.config.horizon)]
+        std  = [[ATTR_STD_MAX] * ANALOG_DIMS for _ in range(self.config.horizon)]
+
         if parent.trajectory:
             last_a = parent.trajectory[-1]
+            last_arr = np.array(last_a, dtype=np.uint8)[: len(ACTION_LOW)]
             for t in range(self.config.horizon):
+                ref_action[t, :] = last_arr
                 mean[t] = [float(x) for x in last_a[:ANALOG_DIMS]]
+
+        # IIAM: get attribution-weighted per-byte std for this regime.
+        # This replaces the flat 90.0 baseline with narrower std for bytes that
+        # causally affect the target and wider std for bytes that don't.
+        attr_std = self.attributor.get_or_compute(
+            self.plc, parent, ref_action, self.config.horizon
+        )
+        for t in range(self.config.horizon):
+            for dim in range(ANALOG_DIMS):
+                std[t][dim] = float(attr_std[dim])
 
         best_rollouts = []
         for _ in range(self.config.cem_generations):
@@ -473,8 +596,14 @@ class MLGoExploreCEM:
                 for dim in range(ANALOG_DIMS):
                     vals = [e[2][t][dim] for e in elites if t < len(e[2])]
                     if vals:
-                        mean[t][dim] = sum(vals) / len(vals)
-                        std[t][dim] = max(4.0, statistics.stdev(vals) if len(vals) > 1 else 4.0)
+                        elite_mean = sum(vals) / len(vals)
+                        elite_std  = max(4.0, statistics.stdev(vals) if len(vals) > 1 else 4.0)
+                        mean[t][dim] = elite_mean
+                        # Allow CEM to narrow std via elite convergence, but not widen
+                        # beyond the attribution ceiling for this byte. Bytes the
+                        # attribution identified as irrelevant stay wide; relevant bytes
+                        # are allowed to converge further if elites agree.
+                        std[t][dim] = min(elite_std, float(attr_std[dim]))
 
         return [(r[0], r[1], r[2]) for r in best_rollouts]
 

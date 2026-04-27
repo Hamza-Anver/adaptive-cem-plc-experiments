@@ -29,7 +29,7 @@ typedef struct {
     int8_t status;
 } PipelineState;
 
-static PipelineState state;
+static _Thread_local PipelineState state;
 
 static const PlcVarMeta METADATA_DICT[] = {
     {"phase",         PLC_TYPE_UINT32, sizeof(Phase),   offsetof(PipelineState, phase)},
@@ -83,7 +83,7 @@ static void reset_to_prime(void) {
 
 void plc_step(const uint8_t* inputs, size_t size) {
     if (size < INPUT_SIZE) return;
-    static uint8_t max_fill_head = 0;
+    static _Thread_local uint8_t max_fill_head = 0;
 
     state.cycle_count++;
     uint8_t pump_rate     = inputs[0];
@@ -169,11 +169,11 @@ void plc_step(const uint8_t* inputs, size_t size) {
 
             if (state.fill_head > max_fill_head) {
                 max_fill_head = state.fill_head;
-                printf("New max fill head: %d at cycle %d\n", max_fill_head, state.cycle_count);
+                //printf("New max fill head: %d at cycle %d\n", max_fill_head, state.cycle_count);
             }
 
             if (state.fill_head >= 64) {
-                printf("Pipeline Deep OOB triggered at index: %d\n", state.fill_head);
+                //printf("Pipeline Deep OOB triggered at index: %d\n", state.fill_head);
                 abort();
             }
             state.buffer[state.fill_head] = state.cycle_count;

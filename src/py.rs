@@ -40,9 +40,13 @@ impl From<CorePlcVarType> for PlcVarType {
 
 #[pyclass]
 pub struct PlcVarMeta {
+    #[pyo3(get)]
     pub name: String,
+    #[pyo3(get)]
     pub var_type: PlcVarType,
+    #[pyo3(get)]
     pub size: usize,
+    #[pyo3(get)]
     pub offset: usize,
 }
 

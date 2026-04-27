@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 use crate::common;
 
 pub fn rollout_states_batch(
@@ -50,35 +52,43 @@ pub fn rollout_states_batch(
         .ok_or_else(|| "output size overflow".to_string())?;
     let mut out = vec![0u8; output_len];
 
-    for rollout_idx in 0..num_rollouts {
-        let state_start = rollout_idx * state_size;
-        let state_end = state_start + state_size;
-        let init_state = &initial_states_flat[state_start..state_end];
+    // Each rollout writes to a distinct, non-overlapping slice of `out`.
+    // The C PLC state is _Thread_local so each Rayon worker thread has its
+    // own independent state — no locking needed.
+    let rollout_slice = num_steps * state_size;
 
-        if !common::set_state(init_state) {
-            return Err(format!("set_state failed for rollout {}", rollout_idx));
-        }
+    out.par_chunks_mut(rollout_slice)
+        .enumerate()
+        .try_for_each(|(rollout_idx, out_slice)| -> Result<(), String> {
+            let init_state =
+                &initial_states_flat[rollout_idx * state_size..(rollout_idx + 1) * state_size];
 
-        for step_idx in 0..num_steps {
-            let input_offset = (rollout_idx * num_steps + step_idx) * input_size;
-            let input_step = &inputs_flat[input_offset..input_offset + input_size];
-            common::step(input_step);
-
-            let step_state = common::state();
-            if step_state.len() != state_size {
-                return Err(format!(
-                    "state size mismatch at rollout {}, step {}: got {}, expected {}",
-                    rollout_idx,
-                    step_idx,
-                    step_state.len(),
-                    state_size
-                ));
+            if !common::set_state(init_state) {
+                return Err(format!("set_state failed for rollout {}", rollout_idx));
             }
 
-            let out_offset = (rollout_idx * num_steps + step_idx) * state_size;
-            out[out_offset..out_offset + state_size].copy_from_slice(&step_state);
-        }
-    }
+            for step_idx in 0..num_steps {
+                let input_offset = (rollout_idx * num_steps + step_idx) * input_size;
+                let input_step = &inputs_flat[input_offset..input_offset + input_size];
+                common::step(input_step);
+
+                let step_state = common::state();
+                if step_state.len() != state_size {
+                    return Err(format!(
+                        "state size mismatch at rollout {}, step {}: got {}, expected {}",
+                        rollout_idx,
+                        step_idx,
+                        step_state.len(),
+                        state_size
+                    ));
+                }
+
+                out_slice[step_idx * state_size..(step_idx + 1) * state_size]
+                    .copy_from_slice(&step_state);
+            }
+
+            Ok(())
+        })?;
 
     Ok(out)
 }
